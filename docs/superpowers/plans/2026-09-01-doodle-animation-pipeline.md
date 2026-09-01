@@ -6,7 +6,7 @@
 
 **架构：** AnimatedDrawings 自部署。TorchServe（Docker）负责涂鸦分析（检测/分割/骨架），AnimatedDrawings 渲染器用 BVH 动捕重定向生成透明 GIF，自写的精灵表后处理器把 GIF 拆帧拼成横向透明 PNG 精灵表。组件间以文件 + JSON 交接。设计见 `docs/superpowers/specs/2026-09-01-doodle-animation-pipeline-design.md`。
 
-**技术栈：** Python 3.8、AnimatedDrawings（vendor 源码）、TorchServe/Docker、OpenCV、Pillow、PyYAML、pytest、Mixamo BVH 动捕资产。
+**技术栈：** Python 3.8、AnimatedDrawings（vendor 源码）、TorchServe/Docker、OpenCV、Pillow、PyYAML、pytest、CMU 公开动捕库 BVH 资产。
 
 ## 关键接口事实（已对源码核实，勿再猜测）
 
@@ -471,13 +471,14 @@ git commit -m "feat: add scene config generator for animated drawings render"
 **文件：**
 - 创建：`server/app/assets/motions/run.bvh`、`run.yaml`
 - 创建：`server/app/assets/motions/jump.bvh`、`jump.yaml`
+- 创建：`server/app/assets/motions/README.md`
 
-- [ ] **步骤 1：获取动捕数据**
+- [ ] **步骤 1：获取动捕数据（已定：CMU 公开动捕库，免登录）**
 
-在 Mixamo（https://www.mixamo.com，免费 Adobe 账号）搜索并下载：
-- `Running`：优先选**双腿交叉幅度小**的跑动（如 "Run" 而非交叉步明显的变体）；
-- `Jump`：选原地起跳到落地的单段动作（如 "Jumping"）。
-下载格式选 `FBX`，用 Blender（导入 FBX → 导出 Motion Capture BVH）或在线转换器转为 BVH，存为 `run.bvh` / `jump.bvh`。
+从 CMU Motion Capture Database 的公开 BVH 转换版本下载（如 cgspeed.com 的 BVH 转换包或 GitHub 上的 CMU BVH 镜像），挑选：
+- `Running`：优先选**双腿交叉幅度小**的跑动循环；
+- `Jump`：选原地起跳到落地的单段动作。
+转换/保存为 `run.bvh` / `jump.bvh`，并在 `server/app/assets/motions/README.md` 记录每个文件的下载来源 URL 与原始动作编号（可追溯）。
 
 - [ ] **步骤 2：用 Blender 查看两个 BVH 的帧数与骨骼命名，编写 `run.yaml`（`jump.yaml` 同构，仅帧区间不同）**
 
@@ -744,5 +745,5 @@ git commit -m "test: record 20-sample spike acceptance results"
 ## 已知风险与对策（尖刺期间按此处置，不扩散范围）
 
 - **正面纹理做侧向跑双腿挤压**：换双腿舒展的跑动资产；仍不理想则在尖刺记录中标注为风格化，由 20 样本评审裁决。
-- **Mixamo → BVH 转换骨骼命名差异**：以 Blender 实际导出为准修正 `run.yaml`/`jump.yaml` 的关节名，不修改任何代码。
+- **CMU BVH 骨骼命名差异**：以实际导出的关节名为准修正 `run.yaml`/`jump.yaml` 的关节名，不修改任何代码。
 - **TorchServe 内存不足静默失败**：`docker compose logs torchserve` 查 `OutOfMemory`，Docker Desktop 内存调到 16GB。
