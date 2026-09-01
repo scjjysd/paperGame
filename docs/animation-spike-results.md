@@ -41,3 +41,17 @@
 - 不达标 → 启用引导画人 + 预置角色降级方案。
 
 **当前状态：待定。** 现有样本不足，无法裁决。管线在唯一可用样本上端到端跑通（17.0 秒 < 60 秒门槛），初步表现积极，但须补足至 20 张真实儿童涂鸦（家长授权，人工采集）后重跑 `pytest tests/test_spike_batch.py` 再行裁决。
+
+## ⑤ 已知残留项（分支级审查甄别，均可延后）
+
+| 残留项 | 处置时机 |
+| --- | --- |
+| 服务化后 API 层应调用 `render_character()`（双动作统一帧尺寸）而非单动作 `render()` | API 层实现时 |
+| 无头/CI 渲染需 `use_mesa=True` 路线，未验证 | 部署演示环境时 |
+| `needs_correction` 附带 mask/关节点编辑数据（规格 §4）未实现 | API 层实现时 |
+| `_resolve_motion_cfg` 边缘隐患（同名文件存在时传相对路径；fp.name 丢子目录）、`frame_size` 小于内容无防御 | 换动作资产或下一轮迭代 |
+| 门面入参未 `resolve()`、`render` docstring 未提 FileNotFoundError | API 层实现时 |
+| `os.chdir(VENDOR)` 进程级状态在 FastAPI 并发下有竞态 | 服务化时用子进程/锁 |
+| 测试导入依赖 `python -m pytest`（cwd 入 sys.path），无 `conftest.py` | 服务化时 |
+| 各模块整洁项（死导入、冗余 except、文档字符串与实现不符等） | 随时顺手 |
+
