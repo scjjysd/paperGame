@@ -23,6 +23,7 @@ character.png
 - `server/docker-compose.yml` 管理 TorchServe 容器（`paper-game/ad-torchserve:local`），端口 8080（推理）/ 8081（管理），内存上限 16GB，内置 python 探活健康检查。
 - `server/scripts/setup-vendor.sh` 幂等拉取 AnimatedDrawings 源码到 `server/vendor/`（不入库），作为镜像构建上下文。
 - 启动命令：`bash scripts/setup-vendor.sh && docker compose up -d --build`；探活 `curl http://localhost:8080/ping` 返回 `{"status":"Healthy"}`。
+- **网络前置条件（已验证）**：本机网络无法直连 docker.io（IPv4/IPv6 均超时），必须在 Docker Desktop → Settings → Resources → Proxies 配置手动代理 `http://host.docker.internal:7890`（不能用 `127.0.0.1`，构建在 VM 内执行）；shell 里 `export all_proxy` 对守护进程无效。GitHub 可慢速直连，镜像内 `wget` 下载 .mar 模型权重依赖该链路。
 - 动画渲染器（②）与后处理器（③）跑在宿主侧独立 Python 环境（conda/venv，Python 3.8，`pip install -e` vendor 源码），通过 HTTP 调用 8080。后续并入 FastAPI + Redis 队列时不改变该边界。
 
 ## 3. 输出契约
