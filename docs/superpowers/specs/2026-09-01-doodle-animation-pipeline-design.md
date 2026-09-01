@@ -32,16 +32,17 @@ character.png
 
 ```json
 {
-  "run":  { "spriteSheetUrl": "run.png",  "frameCount": 12, "fps": 12, "frameWidth": 256, "frameHeight": 256, "footAnchor": { "x": 128, "y": 250 } },
-  "jump": { "spriteSheetUrl": "jump.png", "frameCount": 10, "fps": 12, "frameWidth": 256, "frameHeight": 256, "footAnchor": { "x": 128, "y": 250 } }
+  "run":  { "spriteSheetUrl": "run.png",  "frameCount": 13, "fps": 12, "frameWidth": 256, "frameHeight": 256, "footAnchor": { "x": 128, "y": 250 } },
+  "jump": { "spriteSheetUrl": "jump.png", "frameCount": 12, "fps": 12, "frameWidth": 256, "frameHeight": 256, "footAnchor": { "x": 128, "y": 250 } }
 }
 ```
 
 规则：
 
 - 帧尺寸取该动作所有帧的最大包围盒，逐帧居中粘贴，保证切帧无裁切。
+- 帧尺寸取该角色所有动作帧内容包围盒的并集（由 `render_character` 保证）。
 - `footAnchor` 为脚底锚点像素坐标，供 Unity 落地对齐；同角色两动作的帧尺寸保持一致。
-- FPS 固定 12，帧数由 BVH 时长采样决定（run 取完整循环 12 帧，jump 取起跳到落地 10 帧）。
+- FPS 固定 12，帧数由 BVH 时长采样决定（实测 run 13 帧，jump 12 帧）。
 
 ## 4. 失败处理
 

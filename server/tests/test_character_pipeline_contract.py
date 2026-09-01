@@ -37,3 +37,21 @@ def test_render_ready_contains_contract_fields(pipeline):
         assert key in anim
     assert anim['fps'] == 12
     assert Path(result['animations']['run']['spriteSheetUrl']).exists()
+
+
+def test_render_character_frame_size_consistent_across_motions(pipeline):
+    """需要 TorchServe 已启动；否则跳过。"""
+    import requests
+    try:
+        requests.get('http://localhost:8080/ping', timeout=2)
+    except Exception:
+        pytest.skip('TorchServe not running')
+
+    img = VENDOR_EXAMPLES / 'drawings' / 'garlic.png'
+    result = pipeline.render_character(img)
+    assert result['status'] == 'ready'
+    run, jump = result['animations']['run'], result['animations']['jump']
+    assert run['frameWidth'] == jump['frameWidth']
+    assert run['frameHeight'] == jump['frameHeight']
+    assert Path(run['spriteSheetUrl']).exists()
+    assert Path(jump['spriteSheetUrl']).exists()
