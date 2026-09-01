@@ -17,3 +17,4 @@ testdata/output/
 # IDE / OS
 .idea/workspace.xml
 .DS_Store
+/.idea/
