@@ -1,0 +1,35 @@
+# 纸上游戏机 · 角色动画尖刺（S1）
+# 仅管理 AnimatedDrawings 所需的 TorchServe 推理服务。
+#
+# 启动前先执行 ../scripts/setup-vendor.sh 拉取 AnimatedDrawings 源码，
+# 首次构建镜像约 5-7 分钟，请为 Docker 分配至少 16GB 内存。
+#
+#   cd server
+#   bash scripts/setup-vendor.sh
+#   docker compose up -d --build
+#   curl http://localhost:8080/ping   # {"status": "Healthy"}
+
+services:
+  torchserve:
+    build:
+      context: vendor/AnimatedDrawings/torchserve
+      dockerfile: Dockerfile
+    image: paper-game/ad-torchserve:local
+    container_name: ad-torchserve
+    ports:
+      - "8080:8080"   # TorchServe 推理 API（涂鸦分析：检测/分割/骨架）
+      - "8081:8081"   # TorchServe 管理 API
+    healthcheck:
+      # 镜像内不保证有 curl，用 python 标准库探活
+      test:
+        - CMD-SHELL
+        - python -c "import urllib.request as u; u.urlopen('http://localhost:8080/ping', timeout=3)" || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 18        # 模型加载较慢，给足启动窗口
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 16g
+    restart: unless-stopped

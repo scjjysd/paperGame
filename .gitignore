@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# 第三方源码（由 scripts/setup-vendor.sh 拉取，不入库）
+server/vendor/
+
+# 尖刺产物与中间文件
+server/out/
+*.mp4
+*.gif
+testdata/output/
+
+# IDE / OS
+.idea/workspace.xml
+.DS_Store
