@@ -327,7 +327,7 @@ import yaml
 REASONS = {
     'Could not detect any drawn humanoids': 'NO_HUMANOID',
     'Could not detect any skeletons': 'NO_SKELETON',
-    'skeletons within the character bounding box': 'MULTIPLE_SKELETONS',
+    'skeletons with the character bounding box': 'MULTIPLE_SKELETONS',
     'Found no contours': 'NO_CONTOUR',
 }
 
@@ -568,7 +568,7 @@ def test_render_ready_contains_contract_fields(pipeline):
     except Exception:
         pytest.skip('TorchServe not running')
 
-    img = VENDOR_EXAMPLES / 'drawings' / 'char2.png'
+    img = VENDOR_EXAMPLES / 'drawings' / 'garlic.png'
     result = pipeline.render(img, motion='run')
     assert result['status'] == 'ready'
     anim = result['animations']['run']
@@ -635,13 +635,14 @@ python - <<'EOF'
 from pathlib import Path
 from app.services.character_pipeline import CharacterPipeline
 from app.services.render_scene import VENDOR
-p = CharacterPipeline('app/assets/motions', 'out/spike')
-img = VENDOR / 'examples/drawings/char2.png'
+p = CharacterPipeline('/Users/scjjysd/IdeaProjects/jjhks/server/app/assets/motions', '/Users/scjjysd/IdeaProjects/jjhks/server/out/spike')
+# 注意：assets_dir 与 out_root 必须传绝对路径（render_animation 会 chdir 到 vendor，相对路径将解析失效）
+img = VENDOR / 'examples/drawings/garlic.png'
 print(p.render(img, 'run')['animations']['run'])
 print(p.render(img, 'jump')['animations']['jump'])
 EOF
 ```
-预期：`out/spike/char2/run/run.png` 与 `out/spike/char2/jump/jump.png` 生成，元数据打印正常。
+预期：`out/spike/garlic/run/run.png` 与 `out/spike/garlic/jump/jump.png` 生成，元数据打印正常。
 
 - [ ] **步骤 6：Commit**
 
@@ -672,9 +673,16 @@ NAMES = ['char1.png', 'char2.png', 'char3.png', 'char4.png', 'garlic.png', 'squi
 
 out = Path(__file__).resolve().parents[2] / 'testdata' / 'characters'
 out.mkdir(parents=True, exist_ok=True)
+failed = []
 for n in NAMES:
-    urllib.request.urlretrieve(BASE + n, out / n)
-    print('downloaded', out / n)
+    try:
+        urllib.request.urlretrieve(BASE + n, out / n)
+        print('downloaded', out / n)
+    except Exception as e:  # 404/网络错误逐文件跳过，不中断批次（尖刺实测 6 张官方示例 5 张 404）
+        failed.append(n)
+        print('FAILED', n, e)
+if failed:
+    print('下载失败（可从 NAMES 移除后重跑）:', failed)
 ```
 
 - [ ] **步骤 2：编写批量验收测试 `server/tests/test_spike_batch.py`**
