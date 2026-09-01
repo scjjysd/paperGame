@@ -1,4 +1,4 @@
-filepath: /Users/scjjysd/IdeaProjects/jjhks/server/app/assets/motions/jump.bvh
+filepath: jump.bvh
 start_frame_idx: 0
 end_frame_idx: 12
 groundplane_joint: LeftFoot

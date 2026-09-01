@@ -14,6 +14,9 @@ server/out/
 *.gif
 testdata/output/
 
+# motion 配置运行时解析产物（render_scene 自动生成）
+*.resolved.yaml
+
 # IDE / OS
 .idea/workspace.xml
 .DS_Store
