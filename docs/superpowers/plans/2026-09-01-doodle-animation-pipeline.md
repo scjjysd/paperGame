@@ -58,7 +58,7 @@ docs/animation-spike-results.md           # 创建：20 样本验收记录
 ```text
 pytest>=7.0
 opencv-python>=4.5
-numpy>=1.21,<1.24
+numpy==1.24.4            # 与 vendor setup.py 钉死版本一致（尖刺实测：<1.24 会触发不兼容警告）
 pillow>=9.0
 pyyaml>=6.0
 requests>=2.27
@@ -196,11 +196,13 @@ from PIL import Image
 
 
 def _load_frames(gif_path: Path):
-    gif = Image.open(gif_path).convert('RGBA')
+    """RGBA GIF 不能加载：逐帧 convert，避免整体 convert 会丢失后续动画帧。
+    （P与 Pillow 10.1.的逐的 convert('RGBA') 行为行为缺陷，任务 2 实现已修正为逐帧。）"""
+    gif = Image.open(gif_path)
     frames = []
     try:
         while True:
-            frames.append(gif.copy())
+            frames.append(gif.convert('RGBA'))
             gif.seek(gif.tell() + 1)
     except EOFError:
         pass
@@ -742,7 +744,8 @@ git commit -m "test: record 20-sample spike acceptance results"
 
 任务 1 → 2（可离线并行）→ 3 → 4 → 5 → 6 → 7。任务 2 不依赖 Docker，可与任务 1 的镜像构建并行。
 
-## 已知风险与对策（尖刺期间按此处置，不扩散范围）
+- 已知风险与对策（尖刺期间按此处置，不扩散范围）：
+  - 若简报源码在任务实现中暴露缺陷，由控制者同步修正计划文件后再进入修复轮（不唤回实现者、不跳过测试）。
 
 - **正面纹理做侧向跑双腿挤压**：换双腿舒展的跑动资产；仍不理想则在尖刺记录中标注为风格化，由 20 样本评审裁决。
 - **CMU BVH 骨骼命名差异**：以实际导出的关节名为准修正 `run.yaml`/`jump.yaml` 的关节名，不修改任何代码。
