@@ -1,0 +1,11 @@
+filepath: /Users/scjjysd/IdeaProjects/jjhks/server/app/assets/motions/run.bvh
+start_frame_idx: 0
+end_frame_idx: 13
+groundplane_joint: LeftFoot
+forward_perp_joint_vectors:
+  - - RightShoulder
+    - LeftShoulder
+  - - RightUpLeg
+    - LeftUpLeg
+scale: 0.01
+up: +y
