@@ -62,7 +62,7 @@ GET /artifacts/{jobId}/{path}   StaticFiles 挂载 ./out/jobs，伺服产物
    "run": {"spriteSheetUrl":"/artifacts/char_abc123/run.png","frameCount":13,"fps":12,"frameWidth":481,"frameHeight":655,"footAnchor":{"x":240,"y":655}},
    "jump":{"spriteSheetUrl":"/artifacts/char_abc123/jump.png","frameCount":12,"fps":12,"frameWidth":481,"frameHeight":655,"footAnchor":{"x":240,"y":655}}}}
 
-// needs_correction：附 mask 与全部 16 关节编辑数据（骨架确认页用，joints 数组固定 16 项）；早期失败（NO_HUMANOID/NO_CONTOUR）时无可编辑标注，joints 为空数组，客户端以 reason 提示重拍
+// needs_correction：附 mask 与关节编辑数据（骨架确认页用；joints 正常路径固定 16 项，早期失败如 NO_HUMANOID/NO_CONTOUR 无可编辑标注时为空数组，客户端以 reason 提示重拍）
 {"status":"needs_correction","reason":"NO_HUMANOID",
  "maskUrl":"/artifacts/char_abc123/anno/mask.png",
  "joints":[{"name":"root","loc":[120,340],"parent":null}, {"name":"hip","loc":[120,340],"parent":"root"}]}
