@@ -1,13 +1,13 @@
-# 纸上游戏机 · 角色动画尖刺（S1）
-# 仅管理 AnimatedDrawings 所需的 TorchServe 推理服务。
+# 纸上游戏机 · 角色异步服务全栈（S1 尖刺 + 角色异步服务）
+# 管理 TorchServe 推理服务、Redis 队列、FastAPI 服务与渲染 worker。
 #
-# 启动前先执行 ../scripts/setup-vendor.sh 拉取 AnimatedDrawings 源码，
+# 启动前先执行 scripts/setup-vendor.sh 拉取 AnimatedDrawings 源码，
 # 首次构建镜像约 5-7 分钟，请为 Docker 分配至少 16GB 内存。
 #
 #   cd server
-#   bash scripts/setup-vendor.sh
-#   docker compose up -d --build
-#   curl http://localhost:8080/ping   # {"status": "Healthy"}
+#   bash scripts/setup-vendor.sh && docker compose up -d --build
+#   curl http://localhost:8080/ping             # {"status": "Healthy"}
+#   curl http://localhost:8000/healthz          # {"status":"ok"}
 
 services:
   torchserve:
@@ -33,3 +33,61 @@ services:
         limits:
           memory: 16g
     restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: pg-redis
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: paper-game/server:local
+    container_name: pg-api
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      OUT_ROOT: /data/out
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./out:/data/out
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+    restart: unless-stopped
+
+  worker:
+    image: paper-game/server:local
+    container_name: pg-worker
+    command: ["python", "-m", "app.workers.character_worker"]
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      OUT_ROOT: /data/out
+      RENDER_USE_MESA: "true"
+      TORCHSERVE_UPSTREAM: torchserve:8080
+    volumes:
+      - ./out:/data/out
+    depends_on:
+      torchserve:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_started   # 确保镜像已构建（api 与 worker 同镜像）
+    restart: unless-stopped
+
+# GPU 扩展位：未来 Linux+NVIDIA 部署时创建 docker-compose.override.yml，
+# 为 torchserve/worker 添加 gpu 资源声明（Mac 开发阶段用 Mesa 软渲染，无需 GPU）。
