@@ -77,6 +77,22 @@ def test_needs_correction_is_business_terminal_no_retry(tmp_path):
     assert len(attempts) == 1   # 业务失败不重试
 
 
+def test_corrupt_result_json_retries_then_render_crashed(tmp_path):
+    job_dir = _job_dir(tmp_path)
+    (job_dir / 'result.json').write_text('{"status": "ready", ')   # 截断的 JSON
+    store = FakeStore(tmp_path)
+    attempts = []
+
+    def runner(d, t):
+        attempts.append(1)
+        return 'done'
+
+    status = process_job(store, 'char_t', runner=runner, timeout=5)
+    assert status == 'failed'
+    assert len(attempts) == 2   # 损坏按基础设施故障重试
+    assert store.calls[-1][2] == {'status': 'failed', 'code': 'RENDER_CRASHED'}
+
+
 def test_relocate_artifacts_moves_pngs_and_anno(tmp_path):
     # 模拟 render_character 的产物结构：work/input/{run,jump}/x.png + work/input/anno
     job_dir = _job_dir(tmp_path)

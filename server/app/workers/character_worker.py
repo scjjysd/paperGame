@@ -1,6 +1,7 @@
 """worker 主循环：BRPOP 消费 -> 子进程渲染 -> 终态写回。并发 = 1（规格锁定）。"""
 import json
 import os
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -11,6 +12,7 @@ from app.services.job_store import JobStore
 SERVER_DIR = Path(__file__).resolve().parents[2]
 SUBPROCESS_TIMEOUT = 120   # 尖刺实测单任务 <=40s 的 3 倍余量
 MAX_ATTEMPTS = 2           # 基础设施故障重试 1 次；业务失败不重试
+_SHUTDOWN = False
 
 
 def _run_subprocess(job_dir: Path, timeout: int) -> str:
@@ -34,7 +36,11 @@ def process_job(store, job_id: str, runner: Callable = None, timeout: int = SUBP
     for _ in range(MAX_ATTEMPTS):
         outcome = runner(job_dir, timeout)
         if outcome == 'done':
-            payload = json.loads((job_dir / 'result.json').read_text())
+            try:
+                payload = json.loads((job_dir / 'result.json').read_text())
+            except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+                outcome = 'crash'
+                continue
             store.set_status(job_id, payload['status'], result=payload)
             return payload['status']
     code = 'RENDER_TIMEOUT' if outcome == 'timeout' else 'RENDER_CRASHED'
@@ -43,16 +49,25 @@ def process_job(store, job_id: str, runner: Callable = None, timeout: int = SUBP
     return 'failed'
 
 
+def _sigterm_handler(signum, frame):
+    global _SHUTDOWN
+    _SHUTDOWN = True
+
+
 def main() -> None:
+    global _SHUTDOWN
+    _SHUTDOWN = False
+    signal.signal(signal.SIGTERM, _sigterm_handler)
     out_root = Path(os.environ.get('OUT_ROOT', str(SERVER_DIR / 'out'))).resolve()
     store = JobStore(os.environ.get('REDIS_URL', 'redis://localhost:6379/0'), out_root / 'jobs')
     print(f'worker listening on {store.r.connection_pool.connection_kwargs}', flush=True)
-    while True:
+    while not _SHUTDOWN:
         job_id = store.dequeue(timeout=5)
         if job_id is None:
             continue
         status = process_job(store, job_id)
         print(f'job {job_id} -> {status}', flush=True)
+    print('worker shutting down', flush=True)
 
 
 if __name__ == '__main__':
