@@ -2,6 +2,7 @@
 import json
 from typing import Optional
 
+import redis.exceptions
 from fastapi import APIRouter, File, Request, UploadFile
 from fastapi.responses import JSONResponse
 
@@ -42,21 +43,18 @@ async def create_character(request: Request, file: UploadFile = File(...)):
         return _error(400, 'NOT_AN_IMAGE')
 
     job_id = contracts.derive_job_id(content)
-    existing = store.get(job_id)
-    if existing is not None:
-        # 非终态：不重复入队；终态：客户端轮询即可看到结果
-        return contracts.JobAccepted(jobId=job_id).model_dump()
-
-    job_dir = store.jobs_root / job_id
-    job_dir.mkdir(parents=True, exist_ok=True)
-    (job_dir / 'input.png').write_bytes(content)
     try:
+        existing = store.get(job_id)
+        if existing is not None:
+            # 非终态：不重复入队；终态：客户端轮询即可看到结果
+            return contracts.JobAccepted(jobId=job_id).model_dump()
+        job_dir = store.jobs_root / job_id
+        job_dir.mkdir(parents=True, exist_ok=True)
+        (job_dir / 'input.png').write_bytes(content)
         store.create(job_id)
         store.enqueue(job_id)
-    except Exception as e:  # redis.ConnectionError 等：入队前探测失败
-        if 'redis' in type(e).__module__:
-            return _error(503, 'QUEUE_UNAVAILABLE')
-        raise
+    except redis.exceptions.RedisError:
+        return _error(503, 'QUEUE_UNAVAILABLE')
     return contracts.JobAccepted(jobId=job_id).model_dump()
 
 

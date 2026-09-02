@@ -117,3 +117,15 @@ def test_upload_after_expiry_re_enqueues_same_job_id(client):
     second = _upload(client, PNG_1PX).json()['jobId']
     assert second == job_id                       # 同图 → 同 jobId
     assert store.r.llen('pq:characters') == 2     # 按新任务重新入队
+
+
+def test_upload_redis_failure_returns_503(client, monkeypatch):
+    import redis.exceptions
+
+    def boom(job_id):
+        raise redis.exceptions.ConnectionError('redis down')
+
+    monkeypatch.setattr(client.app.state.store, 'get', boom)
+    resp = _upload(client, PNG_1PX)
+    assert resp.status_code == 503
+    assert resp.json()['code'] == 'QUEUE_UNAVAILABLE'

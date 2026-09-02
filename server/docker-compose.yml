@@ -87,6 +87,7 @@ services:
         condition: service_healthy
       api:
         condition: service_started   # 确保镜像已构建（api 与 worker 同镜像）
+    stop_grace_period: 300s   # >= SUBPROCESS_TIMEOUT(120s) x MAX_ATTEMPTS(2) + 余量，防 docker 默认 10s SIGKILL 打断渲染
     restart: unless-stopped
 
 # GPU 扩展位：未来 Linux+NVIDIA 部署时创建 docker-compose.override.yml，

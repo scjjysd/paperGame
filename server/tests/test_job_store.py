@@ -48,6 +48,14 @@ def test_get_falls_back_to_result_json_snapshot(store, tmp_path):
     assert json.loads(data['result']) == payload
 
 
+def test_get_corrupt_result_json_snapshot_returns_none(store, tmp_path):
+    # 截断的 result.json（如 worker 被 SIGKILL 打断落盘）→ 损坏视同不存在，API 层 404 可重传
+    job_dir = tmp_path / 'char_corrupt'
+    job_dir.mkdir()
+    (job_dir / 'result.json').write_text('{"status": ')
+    assert store.get('char_corrupt') is None
+
+
 def test_get_unknown_returns_none(store):
     assert store.get('char_missing') is None
 

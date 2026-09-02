@@ -52,6 +52,10 @@ class JobStore:
             return data
         snapshot = self.jobs_root / job_id / 'result.json'
         if snapshot.exists():
-            payload = json.loads(snapshot.read_text())
-            return {'status': payload['status'], 'result': json.dumps(payload, ensure_ascii=False)}
+            try:
+                payload = json.loads(snapshot.read_text())
+                return {'status': payload['status'], 'result': json.dumps(payload, ensure_ascii=False)}
+            except (json.JSONDecodeError, KeyError, OSError):
+                # 损坏快照视同不存在：API 返回 404，客户端可重传（同图同 jobId 幂等重新入队）
+                return None
         return None
