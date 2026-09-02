@@ -1,4 +1,5 @@
 """生成 AnimatedDrawings 渲染场景 YAML 并执行渲染，输出透明 GIF。"""
+import os
 from pathlib import Path
 
 import yaml
@@ -21,10 +22,15 @@ def _resolve_motion_cfg(motion_cfg_fn: Path) -> Path:
     return resolved
 
 
-def render_animation(char_anno_dir, motion_cfg_fn, out_gif, use_mesa=False) -> Path:
-    char_anno_dir, out_gif = Path(char_anno_dir), Path(out_gif)
-    out_gif.parent.mkdir(parents=True, exist_ok=True)
+def _mesa_default() -> bool:
+    return os.environ.get('RENDER_USE_MESA', '').strip().lower() in ('1', 'true', 'yes')
 
+
+def build_scene_cfg(char_anno_dir, motion_cfg_fn, out_gif, use_mesa=None) -> dict:
+    """构建 AnimatedDrawings 渲染场景配置。use_mesa=None 时由 RENDER_USE_MESA 环境变量决定。"""
+    char_anno_dir, out_gif = Path(char_anno_dir), Path(out_gif)
+    if use_mesa is None:
+        use_mesa = _mesa_default()
     cfg = {
         'scene': {'ANIMATED_CHARACTERS': [{
             'character_cfg': str(char_anno_dir / 'char_cfg.yaml'),
@@ -35,12 +41,18 @@ def render_animation(char_anno_dir, motion_cfg_fn, out_gif, use_mesa=False) -> P
     }
     if use_mesa:
         cfg['view'] = {'USE_MESA': True}
+    return cfg
+
+
+def render_animation(char_anno_dir, motion_cfg_fn, out_gif, use_mesa=None) -> Path:
+    out_gif = Path(out_gif)
+    out_gif.parent.mkdir(parents=True, exist_ok=True)
+    cfg = build_scene_cfg(char_anno_dir, motion_cfg_fn, out_gif, use_mesa=use_mesa)
 
     # character_cfg 内的相对路径以 vendor 仓库根为基准，渲染需在该目录下执行
     scene_yaml = out_gif.with_suffix('.scene.yaml')
     scene_yaml.write_text(yaml.safe_dump(cfg))
 
-    import os
     from animated_drawings import render
     cwd = os.getcwd()
     os.chdir(VENDOR)
