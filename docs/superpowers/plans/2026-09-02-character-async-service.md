@@ -65,12 +65,13 @@ docs/async-service-smoke-results.md # 任务 8：冒烟与回归记录
 - 创建：`server/docker/entrypoint.sh`
 - 创建：`server/scripts/render_smoke.py`
 
-- [ ] **步骤 1：创建 `server/requirements-service.txt`**（vendor 运行时子集，跳过 torchserve/Flask/scikit-learn——worker 不需要，省约 800MB torch 下载；加服务依赖）
+- [ ] **步骤 1：创建 `server/requirements-service.txt`**（vendor 运行时子集，跳过 torchserve/Flask——worker 不需要，省约 800MB torch 下载；保留 scikit-learn（retargeter.py 无条件导入，尖刺实测）；加服务依赖）
 
 ```text
 numpy==1.24.4
 scipy==1.10.0
 scikit-image==0.19.3
+scikit-learn==1.1.2
 shapely==1.8.5.post1
 opencv-python==4.6.0.66
 Pillow==10.1.0
@@ -188,7 +189,7 @@ docker run --rm \
   -e TORCHSERVE_UPSTREAM=host.docker.internal:8080 \
   --add-host=host.docker.internal:host-gateway \
   paper-game/server:local \
-  python scripts/render_smoke.py /data/testdata/characters/garlic.png /data/out/mesa-spike
+  python scripts/render_smoke.py /data/testdata/characters/s01.png /data/out/mesa-spike
 ```
 
 预期（**GO**）：打印 `MESA_SMOKE_PASS frames=13 ...`，`out/mesa-spike/smoke.gif` 生成。
@@ -1162,7 +1163,7 @@ if __name__ == '__main__':
 - [ ] **步骤 6：宿主直跑 runner 冒烟一次（真实渲染，TorchServe 需在线）**
 
 ```bash
-mkdir -p out/jobs/char_manualtest && cp ../testdata/characters/garlic.png out/jobs/char_manualtest/input.png
+mkdir -p out/jobs/char_manualtest && cp ../testdata/characters/s01.png out/jobs/char_manualtest/input.png
 python -m app.workers.render_runner out/jobs/char_manualtest
 cat out/jobs/char_manualtest/result.json | python -m json.tool | head -20
 ```
@@ -1291,7 +1292,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 API="${API_BASE:-http://localhost:8000}"
-SAMPLE="${1:-../testdata/characters/garlic.png}"
+SAMPLE="${1:-../testdata/characters/s01.png}"   # s01 与官方示例 garlic.png 内容相同（MD5 一致）
 TIMEOUT_SEC=180
 
 echo "== 健康检查 =="
