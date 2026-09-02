@@ -9,6 +9,7 @@ import redis
 QUEUE_KEY = 'pq:characters'
 JOB_KEY = 'job:{}'
 TTL_SECONDS = 24 * 3600
+TERMINAL_STATES = frozenset({'ready', 'needs_correction', 'failed'})
 
 
 def _now() -> str:
@@ -36,6 +37,9 @@ class JobStore:
 
     def set_status(self, job_id: str, status: str, result: Optional[dict] = None) -> None:
         key = JOB_KEY.format(job_id)
+        current = self.r.hget(key, 'status')
+        if current in TERMINAL_STATES:
+            return
         mapping = {'status': status, 'updatedAt': _now()}
         if result is not None:
             mapping['result'] = json.dumps(result, ensure_ascii=False)

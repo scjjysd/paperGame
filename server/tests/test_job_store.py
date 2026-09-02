@@ -50,3 +50,11 @@ def test_get_falls_back_to_result_json_snapshot(store, tmp_path):
 
 def test_get_unknown_returns_none(store):
     assert store.get('char_missing') is None
+
+
+def test_terminal_state_is_immutable(store):
+    store.create('char_a')
+    store.set_status('char_a', 'ready', result={'status': 'ready'})
+    store.set_status('char_a', 'failed', result={'status': 'failed', 'code': 'INTERNAL'})
+    data = store.get('char_a')
+    assert data['status'] == 'ready'   # 终态不被覆写
