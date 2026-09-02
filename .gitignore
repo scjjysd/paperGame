@@ -21,3 +21,4 @@ testdata/output/
 .idea/workspace.xml
 .DS_Store
 /.idea/
+/.codegraph/
