@@ -58,8 +58,9 @@ class NeedsCorrection(BaseModel):
     @field_validator('joints')
     @classmethod
     def _sixteen_joints(cls, v):
-        if len(v) != 16:
-            raise ValueError(f'joints must have exactly 16 items, got {len(v)}')
+        # 早期失败（NO_HUMANOID/NO_CONTOUR 等）时 char_cfg.yaml 不存在，无可编辑标注，joints 为空数组
+        if len(v) != 16 and len(v) != 0:
+            raise ValueError(f'joints must have exactly 16 items or be empty (early-failure), got {len(v)}')
         return v
 
 

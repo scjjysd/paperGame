@@ -49,6 +49,13 @@ def test_needs_correction_requires_16_joints():
                         maskUrl='/m.png', joints=joints[:15])
 
 
+def test_needs_correction_allows_empty_joints_for_early_failure():
+    # 早期失败（NO_HUMANOID/NO_CONTOUR）无 char_cfg.yaml，无可编辑标注 → joints 空数组合法
+    nc = NeedsCorrection(status='needs_correction', reason='NO_HUMANOID',
+                         maskUrl='/artifacts/char_x/anno/mask.png', joints=[])
+    assert nc.joints == []
+
+
 def test_job_accepted_and_failed_shapes():
     assert JobAccepted(jobId='char_x').model_dump() == {'jobId': 'char_x'}
     assert JobFailed(status='failed', code='RENDER_TIMEOUT').model_dump() == {'status': 'failed', 'code': 'RENDER_TIMEOUT'}
