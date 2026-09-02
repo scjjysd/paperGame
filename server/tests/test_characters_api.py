@@ -106,3 +106,14 @@ def test_artifacts_static_serving(client, tmp_path):
     resp = client.get(f'/artifacts/{job_id}/run.png')
     assert resp.status_code == 200
     assert resp.content == PNG_1PX
+
+
+def test_upload_after_expiry_re_enqueues_same_job_id(client):
+    job_id = _upload(client, PNG_1PX).json()['jobId']
+    store = client.app.state.store
+    # 模拟 TTL 过期：删除 Redis 记录（result.json 由 worker 落盘，此处从未生成）
+    store.r.delete('job:' + job_id)
+    assert store.get(job_id) is None
+    second = _upload(client, PNG_1PX).json()['jobId']
+    assert second == job_id                       # 同图 → 同 jobId
+    assert store.r.llen('pq:characters') == 2     # 按新任务重新入队
