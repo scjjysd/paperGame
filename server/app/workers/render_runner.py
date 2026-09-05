@@ -10,7 +10,6 @@ import traceback
 from pathlib import Path
 
 SERVER_DIR = Path(__file__).resolve().parents[2]
-ASSETS_DIR = SERVER_DIR / 'app' / 'assets' / 'motions'
 MOTIONS = ('run', 'jump')
 
 
@@ -44,7 +43,7 @@ def run(job_dir: Path) -> int:
     from app.services.annotations import NeedsCorrection
     from app.services.character_pipeline import CharacterPipeline
 
-    pipeline = CharacterPipeline(ASSETS_DIR, job_dir / 'work')
+    pipeline = CharacterPipeline(job_dir / 'work')
     try:
         result = pipeline.render_character(job_dir / 'input.png')
     except NeedsCorrection as e:

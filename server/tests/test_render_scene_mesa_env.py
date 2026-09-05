@@ -20,17 +20,18 @@ def _cfg(tmp_path, monkeypatch, env_value):
 
 def test_env_true_enables_mesa(tmp_path, monkeypatch):
     cfg = _cfg(tmp_path, monkeypatch, 'true')
-    assert cfg['view'] == {'USE_MESA': True}
+    assert cfg['view']['USE_MESA'] is True
+    assert cfg['view']['CAMERA_POS'][2] >= 2.8, 'mesa 开关不该顺手覆盖相机余量'
 
 
 def test_env_1_enables_mesa(tmp_path, monkeypatch):
     cfg = _cfg(tmp_path, monkeypatch, '1')
-    assert cfg['view'] == {'USE_MESA': True}
+    assert cfg['view']['USE_MESA'] is True
 
 
 def test_env_absent_disables_mesa(tmp_path, monkeypatch):
     cfg = _cfg(tmp_path, monkeypatch, None)
-    assert 'view' not in cfg
+    assert 'USE_MESA' not in cfg['view']
 
 
 def test_explicit_param_wins_over_env(tmp_path, monkeypatch):
@@ -41,4 +42,4 @@ def test_explicit_param_wins_over_env(tmp_path, monkeypatch):
     motion.write_text(yaml.safe_dump({'filepath': str(tmp_path / 'm.bvh')}))
     (tmp_path / 'm.bvh').write_text('dummy')
     cfg = build_scene_cfg(anno, motion, tmp_path / 'o.gif', use_mesa=False)
-    assert 'view' not in cfg
+    assert 'USE_MESA' not in cfg['view']

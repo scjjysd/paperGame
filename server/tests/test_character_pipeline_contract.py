@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from app.services.character_pipeline import CharacterPipeline
+from app.services.character_pipeline import FPS, CharacterPipeline
 from app.services.annotations import NeedsCorrection
 
 VENDOR_EXAMPLES = Path(__file__).parent.parent / 'vendor' / 'AnimatedDrawings' / 'examples'
@@ -10,10 +10,7 @@ VENDOR_EXAMPLES = Path(__file__).parent.parent / 'vendor' / 'AnimatedDrawings' /
 
 @pytest.fixture
 def pipeline(tmp_path):
-    return CharacterPipeline(
-        assets_dir=Path(__file__).parent.parent / 'app' / 'assets' / 'motions',
-        out_root=tmp_path,
-    )
+    return CharacterPipeline(out_root=tmp_path)
 
 
 def test_render_invalid_input_returns_needs_correction(pipeline, tmp_path):
@@ -35,7 +32,7 @@ def test_render_ready_contains_contract_fields(pipeline):
     anim = result['animations']['run']
     for key in ('spriteSheetUrl', 'frameCount', 'fps', 'frameWidth', 'frameHeight', 'footAnchor'):
         assert key in anim
-    assert anim['fps'] == 12
+    assert anim['fps'] == FPS
     assert Path(result['animations']['run']['spriteSheetUrl']).exists()
 
 

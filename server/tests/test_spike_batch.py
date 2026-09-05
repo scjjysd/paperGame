@@ -12,10 +12,7 @@ TIMEOUT_SEC = 60
 
 @pytest.mark.skipif(not SAMPLES, reason='samples not downloaded')
 def test_spike_batch_meets_acceptance_bar():
-    pipeline = CharacterPipeline(
-        Path(__file__).parent.parent / 'app' / 'assets' / 'motions',
-        Path(__file__).parent.parent / 'out' / 'spike',
-    )
+    pipeline = CharacterPipeline(Path(__file__).parent.parent / 'out' / 'spike')
     results = []
     for img in SAMPLES:
         t0 = time.time()
