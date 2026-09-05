@@ -1,5 +1,14 @@
 FROM python:3.9-slim
 
+# ============ 配置国内镜像源 ============
+# pip 全局镜像（清华源）
+RUN pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple && \
+    pip config set global.trusted-host pypi.tuna.tsinghua.edu.cn
+
+# apt 替换为阿里云镜像（python:3.9-slim 基于 Debian Bullseye，使用传统 sources.list）
+RUN sed -i 's|http://deb.debian.org|https://mirrors.aliyun.com|g' /etc/apt/sources.list
+
+# ============ 系统依赖 ============
 # opencv-python 需要 libgl1/libglib2.0-0；Mesa 软渲染需要 libosmesa6；socat 供 entrypoint 转发
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libosmesa6 libosmesa6-dev libgl1 libglib2.0-0 socat curl \
