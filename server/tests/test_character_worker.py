@@ -107,3 +107,16 @@ def test_relocate_artifacts_moves_pngs_and_anno(tmp_path):
     assert (job_dir / 'jump.png').read_bytes() == b'png'
     assert (job_dir / 'anno' / 'mask.png').read_bytes() == b'mask'
     assert not (job_dir / 'work').exists()
+
+
+def test_relocate_artifacts_moves_gifs(tmp_path):
+    """审查页要看未裁切的原始 GIF：必须连 {m}.gif 一起搬，否则随 work/ 被 rmtree 删掉。"""
+    job_dir = _job_dir(tmp_path)
+    work = job_dir / 'work' / 'input'
+    for m in ('run', 'jump'):
+        (work / m).mkdir(parents=True)
+        (work / m / f'{m}.png').write_bytes(b'png')
+        (work / m / f'{m}.gif').write_bytes(b'gif')
+    relocate_artifacts(job_dir)
+    assert (job_dir / 'run.gif').read_bytes() == b'gif'
+    assert (job_dir / 'jump.gif').read_bytes() == b'gif'

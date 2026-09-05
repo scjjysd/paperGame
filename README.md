@@ -216,9 +216,14 @@ GET /v1/characters/{jobId}
   200 {"status": "...", ...终态附带字段, "updatedAt": "..."}
   404 {"code": "JOB_NOT_FOUND"}
 
+GET /v1/characters/{jobId}/detail   审查用：原图/GIF/标注/精灵表的全部 URL 与元数据（非契约，字段可变）
+GET /v1/characters/{jobId}/view     同一份信息的单页 HTML，浏览器直开即可目视验收
+
 GET /artifacts/{jobId}/{path}   StaticFiles 挂载 ./out/jobs
 GET /healthz                    {"status": "ok"}
 ```
+
+给 Unity 的完整接口文档（字段类型、精灵表切帧、错误码、C# DTO、已知边界）见根目录 [`API.md`](API.md)。
 
 **幂等**：`jobId` 由文件内容 sha256 派生 —— 同图必得同 ID。已存在且非终态时不重复入队；状态已过期且无快照时，同图重复提交按新任务重新入队（ID 不变）。
 
@@ -230,10 +235,10 @@ GET /healthz                    {"status": "ok"}
 // ready：animations 必须恰好含 run 与 jump，两者帧尺寸相等
 {"status":"ready","characterId":"char_9c3ff81ce4ea",
  "animations":{
-   "run": {"spriteSheetUrl":"/artifacts/char_9c3ff81ce4ea/run.png","frameCount":13,"fps":12,
-           "frameWidth":239,"frameHeight":339,"footAnchor":{"x":119,"y":339}},
-   "jump":{"spriteSheetUrl":"/artifacts/char_9c3ff81ce4ea/jump.png","frameCount":12,"fps":12,
-           "frameWidth":239,"frameHeight":339,"footAnchor":{"x":119,"y":339}}}}
+   "run": {"spriteSheetUrl":"/artifacts/char_9c3ff81ce4ea/run.png","frameCount":10,"fps":15,
+           "frameWidth":241,"frameHeight":275,"footAnchor":{"x":120,"y":275}},
+   "jump":{"spriteSheetUrl":"/artifacts/char_9c3ff81ce4ea/jump.png","frameCount":7,"fps":15,
+           "frameWidth":241,"frameHeight":275,"footAnchor":{"x":120,"y":275}}}}
 
 // needs_correction：附 mask 与关节编辑数据，供 Unity「骨架点确认」页
 {"status":"needs_correction","reason":"NO_HUMANOID",
@@ -424,6 +429,7 @@ python -m pytest tests/ -v --ignore=tests/test_spike_batch.py
 
 | 文件 | 读它的时机 |
 |---|---|
+| [`API.md`](API.md) | **要给 Unity 接客户端**：全部端点、字段类型、精灵表切帧与脚底锚点、错误码、C# DTO、已知边界（CORS / 无鉴权）|
 | [`2026-09-01-paper-game-p0.md`](2026-09-01-paper-game-p0.md) | 想知道整体目标、8 个任务、10 日排期、前后端职责边界、三段 MVP 验收链路 |
 | [`docs/superpowers/specs/2026-09-01-doodle-animation-pipeline-design.md`](docs/superpowers/specs/2026-09-01-doodle-animation-pipeline-design.md) | 想知道动画管线为什么选 AnimatedDrawings 自部署、输出契约、失败处理 |
 | [`docs/superpowers/plans/2026-09-01-doodle-animation-pipeline.md`](docs/superpowers/plans/2026-09-01-doodle-animation-pipeline.md) | 想按 TDD 步骤重走一遍管线实现；含**已对 vendor 源码核实的接口事实**（勿再猜测） |

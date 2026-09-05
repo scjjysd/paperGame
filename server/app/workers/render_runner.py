@@ -14,12 +14,17 @@ MOTIONS = ('run', 'jump')
 
 
 def relocate_artifacts(job_dir: Path) -> None:
-    """render_character 产物在 work/input/** 下，搬运到 job_dir 根的契约布局。"""
+    """render_character 产物在 work/input/** 下，搬运到 job_dir 根。
+
+    .png 是 Unity 精灵表（契约产物）；.gif 是未裁切的渲染原件，只给 /view 审查页对照用，
+    不搬就会随 work/ 被 rmtree 删掉。
+    """
     work_char = job_dir / 'work' / 'input'
     for m in MOTIONS:
-        src = work_char / m / f'{m}.png'
-        if src.exists():
-            shutil.move(str(src), str(job_dir / f'{m}.png'))
+        for ext in ('png', 'gif'):
+            src = work_char / m / f'{m}.{ext}'
+            if src.exists():
+                shutil.move(str(src), str(job_dir / f'{m}.{ext}'))
     anno_src = work_char / 'anno'
     if anno_src.exists():
         anno_dst = job_dir / 'anno'
