@@ -33,7 +33,7 @@
 | P0 任务 | 内容 | 状态 |
 |---|---|---|
 | 任务 1 | 契约、样本、验收基线 | ✅ 服务端侧完成（`app/contracts.py` + `testdata/characters/s01-s20.png`）；Unity 侧 `GameContracts.cs` 未建 |
-| 任务 2 | AnimatedDrawings 可行性尖刺 | ✅ **验收通过**：20/20 成功，单张最大 18.1s（门槛 ≥16 成功、≤60s） |
+| 任务 2 | AnimatedDrawings 可行性尖刺 | ✅ **验收通过**：20/20 成功，单张最大 18.1s（门槛 ≥16 成功、≤60s）。画质经两轮返工：先补标注修复（第 ⑥ 节），再把动画驱动从三维动捕投影换成按画合成二维（第 ⑦ 节）——现首帧掰动 0.00°、全图丢失中位 0.9%、形状保真 19/20 |
 | 任务 3 | 服务端角色异步接口 | ✅ **完成并冒烟通过**：4 容器全栈、46 用例全绿、端到端 `SMOKE_E2E_PASS` |
 | 任务 4 | 服务端关卡视觉解析 | ⬜ 未开始（无 `level_parser.py` / `api/levels.py`） |
 | 任务 5 | 服务端可玩性校验 | ⬜ 未开始（无 `playability.py`） |
@@ -55,17 +55,36 @@ character.png（涂鸦照片）
    │          → mask.png / texture.png / char_cfg.yaml（16 关节骨架）
    │          失败 → 抛 NeedsCorrection(NO_HUMANOID / NO_SKELETON / MULTIPLE_SKELETONS / NO_CONTOUR)
    │
+   ├─①.5 修复 annotation_repair.repair_or_reject()
+   │          ① 重裁：检测框常没框住整张画（s07 有 42% 墨迹在框外）。三个候选按全图丢失率
+   │             择优——按墨迹真实包围盒重裁 / 按框尺寸外扩 15% / 原框；仅当丢失率严格更低
+   │             时入选，且网格连通性不得差于 vendor 原始标注，否则自动回退
+   │          ② 重建 mask：把「只留最大轮廓」丢弃的部件补回，桥接到主体并强制单连通
+   │          ③ 关节吸附：mask 外的关节吸附到中轴，消除 ARAP 丢 pin
+   │          ④ 末端外推：手/脚控制点沿肢体方向推到墨迹末端（没有 pin 的那截会被网格乱拖）
+   │          ⑤ 门禁：【吸附前】关节偏移 > 25% 对角线 → NeedsCorrection(SKELETON_MISFIT)
+   │          ⑥ 降级阶梯：网格连通性不得差于 vendor 原始标注，否则逐级回退（防死锁）
+   │
+   ├─①.7 合成 motion_2d.synth_motion()
+   │          按这张画自己的骨架现场生成纯二维 BVH（每张画一份，不用外部动捕资产）
+   │          → 首帧＝原画姿态（20 份样本实测偏离 0.00°），后续帧只叠加小幅摆动
+   │          → 走 35°+膝弯 16°/10 帧、跳 18°+腾空 14% 身高/7 帧，非人形自动压到 1/3 幅度
+   │
    ├─② 渲染   render_scene.render_animation()
-   │          → 生成 scene YAML（character_cfg + motion_cfg + retarget fair1_ppf）
+   │          → 生成 scene YAML（character_cfg + 上一步的 motion_cfg + retarget flat2d）
    │          → os.chdir(vendor) → animated_drawings.render.start()
-   │          → run.gif（13 帧）/ jump.gif（12 帧），RGBA 透明
+   │          → run.gif（10 帧）/ jump.gif（7 帧），RGBA 透明
    │
    └─③ 拼表   sprite_sheet.build_sprite_sheet()
               → 逐帧 convert('RGBA') → 所有帧内容包围盒并集 → 横向拼接
               → run.png / jump.png + 元数据（frameCount/fps/frameWidth/frameHeight/footAnchor）
 ```
 
-①② 是 AnimatedDrawings 现成能力（**只配置、不改 vendor 源码**），③ 是本项目唯一新写的图像后处理代码。三段以文件交接，任一步可独立重跑。
+①② 是 AnimatedDrawings 现成能力（**只配置、不改 vendor 源码**），①.5 / ①.7 / ③ 是本项目自写代码。各段以文件交接，任一步可独立重跑。
+
+> **①.7 为什么必须存在**：三维动捕的起始姿势（立正站好、手垂身侧）与孩子画的姿势（手举高、腿叉开）对不上，ARAP 在第 0 帧就要把肢体平均掰 **64°**（最狠 179°，等于把手臂对折），画被横向压扁到 50%、手臂压进躯干——这就是「跳的手没了」「跳为什么会变形」的来源。换任何固定动捕资产最好也只能降到 34°（20 张画姿态各异）。改为按画合成后首帧掰动恒为 0°，摆幅由配方直接给定。详见 [`docs/animation-spike-results.md`](docs/animation-spike-results.md) 第 ⑦ 节。
+
+> **①.5 为什么必须存在**：vendor 侧有五道叠加缺陷——**D0** 检测框把画切了（框外墨迹根本不进 `texture.png`）；**D1** `segment()` 只保留最大连通轮廓；**D2** `_load_txtr()` 把 mask 之外的纹理像素强制 `alpha=0`；**D3** `_generate_mesh()` 建网格时又只取最长轮廓；**D4** 落在三角面之外的关节被 ARAP 当作 pin 永久丢弃。后果：与身体断开的部件（天使头环、整块头部）在成片里彻底消失；pose 模型把关节估到体外时（s20 的 `neck` 距 mask 96.9px）ARAP 用悬空骨骼驱动网格，产生严重剪切变形。完整证据链、修复数据与实施中踩到的五个坑见 [`docs/animation-spike-results.md`](docs/animation-spike-results.md) 第 ⑥ 节。
 
 **服务化后**，这条链路被包在异步任务里：
 
@@ -103,6 +122,7 @@ jjhks/
     │   ├── api/characters.py        POST 上传入队（幂等）/ GET 轮询
     │   ├── services/
     │   │   ├── annotations.py       ① vendor 包装层：异常 → NeedsCorrection
+    │   │   ├── annotation_repair.py ①.5 扩框重裁 + mask 重建 + 关节吸附 + 门禁 + 网格降级阶梯
     │   │   ├── render_scene.py      ② 场景 YAML 生成 + 渲染；Mesa 开关；motion 路径自愈
     │   │   ├── sprite_sheet.py      ③ GIF → 透明 PNG 精灵表 + footAnchor
     │   │   ├── character_pipeline.py ★ 管线门面 render() / render_character()
@@ -117,8 +137,9 @@ jjhks/
     │   ├── render_smoke.py          容器内 Mesa 渲染 go/no-go 尖刺
     │   ├── smoke_e2e.sh           ★ 全栈端到端冒烟（上传→轮询→下载验 PNG→幂等复验）
     │   ├── decimate_bvh.py          BVH 抽稀（可复用）
+    │   ├── diagnose_annotations.py  ★ 标注质量验收：一键产出丢失率/关节偏移/丢 pin 三项指标（`--render` 含实渲）
     │   └── download_samples.py      官方示例涂鸦下载（正式样本已入库，仅留档）
-    ├── tests/                       47 个用例（46 回归 + 1 尖刺验收）
+    ├── tests/                       63 个用例（62 回归 + 1 尖刺验收）
     ├── docker-compose.yml         ★ 4 容器编排：torchserve / redis / api / worker
     ├── Dockerfile                   api 与 worker 共享镜像（python:3.9-slim + OSMesa）
     ├── docker/entrypoint.sh         socat 把容器内 localhost:8080 转发到 torchserve:8080
@@ -231,7 +252,7 @@ GET /healthz                    {"status": "ok"}
 
 - `JobState`：`queued` `processing` `needs_correction` `ready` `failed`
 - `ErrorCode`：`FILE_TOO_LARGE` `NOT_AN_IMAGE` `UNSUPPORTED_FORMAT` `JOB_NOT_FOUND` `QUEUE_UNAVAILABLE` `RENDER_TIMEOUT` `RENDER_CRASHED` `ASSET_MISSING` `INTERNAL`
-- `CorrectionReason`：`NO_HUMANOID` `NO_SKELETON` `MULTIPLE_SKELETONS` `NO_CONTOUR` `ANALYZE_FAILED`
+- `CorrectionReason`：`NO_HUMANOID` `NO_SKELETON` `MULTIPLE_SKELETONS` `NO_CONTOUR` `SKELETON_MISFIT` `ANALYZE_FAILED`
 - 关卡侧（**尚未实现**，契约已在 P0 计划中锁定）：`playable` / `needs_fix`，错误码 `NO_GROUND` `NO_FLAG` `MULTIPLE_FLAGS` `GOAL_UNREACHABLE` `PHOTO_INVALID`
 
 Unity 侧 `GameContracts.cs` 将来照 `contracts.py` 逐字镜像，客户端禁止使用匿名 JSON。
@@ -312,10 +333,11 @@ python -m pytest tests/ -v --ignore=tests/test_spike_batch.py
 
 ## 9. 测试地图
 
-`server/tests/` 共 **47 个用例**：46 个服务层回归 + 1 个尖刺验收。
+`server/tests/` 共 **63 个用例**：62 个服务层回归 + 1 个尖刺验收。
 
 | 文件 | 用例数 | 覆盖内容 | 外部依赖 |
 |---|---|---|---|
+| `test_annotation_repair.py` | 16 | 断开部件（头环）被补回且像素/网格双连通、干净 mask 不被膨胀、非连续内存不崩、关节吸附到中轴而非边缘、越界关节不崩且计入偏移、**门禁时序（吸附前度量 + 拒绝时仍写回吸附结果）**、texture 必为 RGBA、vendor resize 复现、扩框几何与护栏、**细颈 mask 被识别为网格断开**、桥宽≥网格间距 2×、**断开时降级不硬写** | 无（合成图） |
 | `test_contracts.py` | 7 | jobId 派生确定性、六键契约、`ready` 必含 run+jump、joints 16/0 双路径 | 无 |
 | `test_job_store.py` | 7 | 队列进出、TTL、result 落盘、快照兜底、损坏快照返回 None、终态不可变 | fakeredis |
 | `test_characters_api.py` | 12 | healthz、202+入队、幂等不重复入队、超大/非图/GIF 拒绝、404、ready 与 needs_correction 响应体、静态伺服、过期后重新入队、Redis 挂 → 503 | fakeredis + TestClient |
@@ -331,7 +353,7 @@ python -m pytest tests/ -v --ignore=tests/test_spike_batch.py
 
 ```bash
 .venv/bin/python -m pytest tests/ -q --ignore=tests/test_spike_batch.py
-# 46 passed, 15 warnings in 26.72s
+# 62 passed, 15 warnings in 43.52s
 ```
 
 15 个警告均来自第三方（vendor `np.bool8` 弃用、urllib3/LibreSSL），非功能性。
@@ -354,6 +376,18 @@ python -m pytest tests/ -v --ignore=tests/test_spike_batch.py
 | 8 | **Python 3.9 不支持 `str \| None` 运行时注解** | 统一用 `Optional[str]`（容器基础镜像 `python:3.9-slim`） |
 | 9 | **`docker compose stop` 默认 10s SIGKILL** | 会打断渲染。worker 已设 `stop_grace_period: 300s`，且捕获 SIGTERM 走优雅退出 |
 | 10 | **容器内无 GPU** | 走 Mesa/OSMesa 软渲染（`RENDER_USE_MESA=true`）。Mesa 尖刺已实证 GO，无需回退到「worker 宿主进程 + GLFW」方案。未来 Linux+NVIDIA 用 `docker-compose.override.yml` 加 GPU 声明 |
+| 11 | **mask 必须单连通** | vendor `_generate_mesh()` 将 `find_contours` 按长度降序后**只用 `contours[0]`**。任何 mask 修补若留下多个连通域，补回的部分依旧会被丢弃 |
+| 12 | **宿主 GLFW 与容器 Mesa 输出分辨率不一致** | `WINDOW_DIMENSIONS` 默认 [500,500]，但 `window_view` 取 `get_framebuffer_size()`，macOS Retina 下产出 **1000×1000**；Mesa 路径产出 500×500。对比产物时必须用**分辨率无关指标**（内容包围盒归一、占比），否则会得出错误结论 |
+| 13 | **验收线曾只测「能否产出」不测「画得对不对」** | 20/20 “成功”里至少 5 份（s08/s09/s15/s17/s20）有严重视觉缺陷却均被判 `ready`。已补上质量门禁；验收时应同时看丢失率、关节偏移与丢 pin 数 |
+| 14 | **vendor 的 `image.png` 存于 resize 之前，`bounding_box.yaml` 却属于 resize 之后的坐标系** | vendor 先 `imwrite(image.png)` 再 `if max(shape) > 1000: cv2.resize(...)`。用 bbox 去切 `image.png` 必须先复现这个缩放，否则**全线错位**（garlic 3024×4032 只能复现 58% 的 mask）。**手机拍摄必然 >1000px，这是真实输入路径上的必要步骤** |
+| 15 | **mask 像素单连通 ≠ 三角网格连通** | 网格断开时 ARAP 刚度矩阵奇异，vendor `while np.linalg.det(...) == 0.0: += 1e-8*I` 会**死循环**（float32 下永不收敛，实测卡 >300s、983% CPU）。已用「不得差于 vendor 原始标注」的相对判据做降级阶梯 |
+| 16 | **桥宽必须 ≥ 2× 网格间距**（`img_dim/39`） | 颈宽 3~8px 时桥内落不到三角面 → 网格断开。实测 300px 图上 12px（1.5×）仍断、16px（2×）才通；固定 4px 正落在死区中央 |
+| 17 | **门禁必须在关节吸附之前度量** | 吸附后关节按定义落在 mask 内，偏移恒为 0——先吸附再度量会让门禁**永久失效**，坏样本静默放行为 `ready` |
+| 18 | **跨不同大小的 crop 比较丢失率，必须映射回原图坐标系** | 用「各自 crop 内」的口径时，不扩框的 crop 里被裁掉的部件根本不存在，丢失率反而接近 0，**会得出完全相反的结论** |
+| 19 | **纯二维骨架必须配 `flat2d.yaml`（三组投影面全 frontal）** | `motion_2d` 生成的骨架整体落在 ZY 平面（x 恒为 0），frontal 取 `(-z, y)` 才是 1:1 还原。换回 vendor 的 `fair1_ppf`（用 pca）会给下肢选中 sagittal（取 x），把只存在于 ZY 平面的动作**整体压掉**（实测大腿摆幅 76°→19°） |
+| 20 | **换检测框后必须同步平移关节坐标** | `char_cfg` 的坐标相对 vendor 那个检测框；错位量＝两框左上角之差。15% 扩框只偏框宽的 15%（勉强目视可过，所以长期没暴露），按墨迹重裁能偏几百像素——实测 s07 偏 239px，ARAP 拿错位的 pin 把水平的猪拧歪压扁 31% |
+| 21 | **char 侧骨骼的父子关系与 retarget 里 BVH 那侧的关节对不是一回事** | 唯一不一致的是 `neck`：BVH 侧是 `Hips→Neck`（跨多级），char 侧 `neck` 的父是 `torso`，vendor 会把那个方向施加到 `torso→neck` 上。照抄 BVH 关节对会让头被硬转两者夹角（s07 25°、s09 23°） |
+| 22 | **NaN 会静默绕过断言** | NaN 参与 `max` 与比较时恒为 False。零长骨（s14 躯干仅占身高 3%）会让 vendor 归一化除零出 NaN，若测试只断言「最大偏差 < 阈值」就会通过。断言里必须显式查 `isfinite` |
 
 ---
 
@@ -363,20 +397,23 @@ python -m pytest tests/ -v --ignore=tests/test_spike_batch.py
 
 **① 动画管线尖刺（任务 2）** —— 详见 [`docs/animation-spike-results.md`](docs/animation-spike-results.md)
 
-- 20 样本 **20 成功 / 0 失败 / 0 需修正**，单张最大 18.1s（门槛：≥16 成功、≤60s）→ **验收线通过**，据此进入任务 3。
+- 20 样本 **20 成功 / 0 失败 / 0 需修正**，单张最大 18.1s（门槛：≥16 成功、≤60s）→ 机械可产出性验收线通过，据此进入任务 3。
 - 覆盖两种画风：官方彩色涂鸦（7 张）与简笔线稿（13 张）。
 - 补充信号：样本筹备阶段 75 张 Quick, Draw! 候选中 6 张 `NO_HUMANOID`，检测器对简笔线稿识别率约 92%，说明 `needs_correction` 分类机制运转正常。
+- **⚠️ 但该裁决不包含画面质量维度。** 2026-09-02 复查发现其中至少 **5 份**（s08 头环丢失、s09 mask 失真、s15/s17/s20 关节错位导致严重变形）不可用于演示，却均被判为 `ready`。根因（vendor 侧 D0-D4 五道叠加缺陷）、修复与重新裁决见该文档**第 ⑥ 节**。修复后：**20/20 可用**（全量实渲 40/40 成功、零空帧、无死锁；丢 pin 从 44 降到 16）。
 - 已知观感局限：2D 正面纹理下 run 的双腿会部分重叠；jump 四肢幅度小，主要靠整体腾空表现跳跃。
 
 **② 异步服务化冒烟（任务 3）** —— 详见 [`docs/async-service-smoke-results.md`](docs/async-service-smoke-results.md)
 
 - `SMOKE_E2E_PASS`，jobId `char_9c3ff81ce4ea`，总耗时 20s；精灵表 run 3107×339 / jump 2868×339，均 RGBA。
-- 全量回归 41 用例全绿（当时数字；后续审查修复项补充至 **46**，本文档已实测复核）。
+- 全量回归 41 用例全绿（当时数字；后续审查修复项补充至 46，再加标注修复的 16 例后为 **62**，本文档已实测复核）。
 - Mesa 尖刺结论 **GO**，部署形态维持全容器化 4 容器，回退分支未启用。
 
 ### 仍待处理的残留项
 
-- **真实儿童画复测**：当前用简笔画代理样本裁决，产品验收前建议以真实儿童涂鸦（家长授权）复测。
+- **真实儿童画复测**：当前用简笔画代理样本裁决，产品验收前建议以真实儿童涂鸦（家长授权）复测，并用 `scripts/diagnose_annotations.py --render` 重标定 `MAX_JOINT_OFFSET` 与 `PAD_RATIO`。
+- **s08/s10/s11/s15 仍各有 2 个 pin 被丢**（s08 原为 22），未归零；归零需改 vendor 的网格密度（已评估为低优先级）。
+- **s09 双腿交叉一团无法修**（双膝间距 10px、左右腿长 18.7% vs 8.6%），经人工确认可接受，故**未加退化门禁**（加了会误杀）。
 - **无头/CI 渲染**：`use_mesa=True` 路线已在容器内验证；纯 CI 环境未验证。
 - **偶发 GLFW 故障的长期观察**：已加进程隔离与重试，需在更大样本量下确认不再复现。
 - 管线层的次要隐患（`_resolve_motion_cfg` 同名文件边缘情况、`frame_size` 小于内容无防御、门面入参未 `resolve()`）记录在尖刺结果文档第 ⑤ 节，可延后。
@@ -400,16 +437,27 @@ python -m pytest tests/ -v --ignore=tests/test_spike_batch.py
 
 ## 13. 下一步
 
-**紧接的两件事**（来自冒烟结论）：
+### 已立项待办（2026-09-04 评估后确定）
+
+| 编号 | 待办 | 触发条件 | 为什么值得做 |
+|---|---|---|---|
+| **F6** | **真实拍摄照片的分割鲁棒性**：把 vendor `segment()` 的 `adaptiveThreshold` 换成对光照/纸纹鲁棒的方案（候选 `rembg`/U²-Net 或 SAM） | 拿到真实手机拍摄样本后 | **优先级最高**。当前 20 个验收样本全是干净白底 PNG，而产品真实输入是手机拍的纸张（纸纹/阴影/光照不均）——**这条路径至今一次未测**。已观察到前微：garlic（彩色非白底）上 `_ink` 大量误判背景，扩框被迫回退。换掉它同时解决 D1（不再只留最大块） |
+| **F4** | **把形变从服务端搬到 Unity 2D Animation**：服务端只出「切好的部件图 + 骨架 JSON」，蒙皮交给 Unity Skinning Editor | 精灵表契约可重议时 | 效果上限最高。ARAP 是 2021 年的研究代码，Unity 2D Animation 是产品级工具链；能彻底摆脱「正面画 + 挤压」这一整类问题，资产体积从 13+12 帧精灵表变成一张图 + 骨架，且美术能手工修权重。代价：会动 P0 已锁定的输出契约，Unity 侧工作量前移 |
+
+同期评估过但**已定不做**的：改 vendor 源码（补丁/Fork/猴补丁）——原本最大的卖点是修 ARAP 丢 pin，已被零改动的「关节中轴吸附」替代；换投影面（pca/frontal/sagittal 按部位组合）——人工目视逐个比对后确认现状 `fair1_ppf.yaml` 最优。
+
+### 紧接的两件事（来自冒烟结论）
 
 1. **对接 P0 任务 6 Unity 客户端联调**：把 `POST /v1/characters` → 轮询 `GET /v1/characters/{jobId}` → 下载 `/artifacts/{jobId}/run.png|jump.png` 接入 Unity，验证五态契约与精灵表元数据在客户端的消费（切帧、跑跳状态机、脚底锚点对齐）。
 2. **演示阶段对象存储升级**：把产物从 api 容器本地静态目录迁到 OSS/S3，`spriteSheetUrl` 指向 CDN，支撑多实例与持久化。
 
-**尚未动工的 P0 任务**：
+### 尚未动工的 P0 任务
 
 - 任务 4：关卡视觉解析（四角定位标记检测 → A4 透视校正 → 1920×1080 画布；HoughLinesP 检黑色近水平线合并为平台；HSV 红色阈值 + 三角形轮廓 + 竖杆空间关系识别旗帜）。
 - 任务 5：可玩性校验（平台为节点、按 Unity 锁定的 `maxJumpX/maxJumpY` 建有向边，从起始平台 BFS 到旗帜所在平台）。
 - 任务 6-7：Unity 侧全部（`client-unity/` 目录尚不存在）。
 - 任务 8：全链路集成验收（15 张真实关卡纸 ≥13 张正确识别；3 名儿童完整流程；全程 ≤3 分钟）。
 
-**明确不在 P0 范围**：迷宫、怪物、金币、自由物体语义识别、关卡编辑器、账号体系、作品分享、多人玩法；非人形角色的自动骨架推断（只可走人工标注路线）。
+### 明确不在 P0 范围
+
+迷宫、怪物、金币、自由物体语义识别、关卡编辑器、账号体系、作品分享、多人玩法；非人形角色的自动骨架推断（只可走人工标注路线）。
