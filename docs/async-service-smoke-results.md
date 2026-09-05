@@ -4,6 +4,10 @@
 分支：`feat/character-async-service`
 执行环境：宿主机 macOS，4 容器栈（torchserve:8080 / api:8000 / redis / worker）已 Up 且健康，worker BRPOP 监听中；宿主 `server/.venv`（系统 python3 亦自带 PIL 11.3.0）。
 
+> **⚠️ 2026-09-05 复测更新**：动画驱动方式已换成按画合成二维（`docs/animation-spike-results.md`
+> 第 ⑦ 节），本文①节里与帧数/帧率/耗时有关的数字随之改变，复测结论见文末「⑤」。
+> 服务化的架构结论（五态、幂等、子进程隔离、退出码协议）不受影响，仍然有效。
+
 ---
 
 ## ① 冒烟结果
@@ -68,3 +72,30 @@
 **下一步：**
 1. **对接 P0 任务 6 Unity 客户端联调：** 将本服务 `POST /v1/characters` → 轮询 `GET /v1/characters/{jobId}` → 下载 `/artifacts/{jobId}/run.png`、`jump.png` 精灵表接入 Unity 侧，验证五态契约（queued/processing/ready/needs_correction/failed）与精灵表元数据在客户端的消费。
 2. **演示阶段对象存储升级：** 当前产物由 api 容器本地静态目录 `/artifacts` 提供；演示阶段将精灵表与产物落至对象存储（如 OSS/S3），替换静态挂载，`spriteSheetUrl` 指向对象存储 CDN 地址，以支撑多实例与持久化。
+
+---
+
+## ⑤ 二维合成方案复测（2026-09-05）
+
+镜像重建后（Dockerfile 改用代理拉包）跑同一个脚本：
+
+- **结果：SMOKE_E2E_PASS**，jobId `char_2ce994453472`，**总耗时 10s**（原 20s）
+- 精灵表：`run` 2710×249 RGBA = **10 帧**、`jump` 1897×249 RGBA = **7 帧**（原 13/12 帧）
+- 元数据：`fps` **15**（原 12），两个动作 `frameWidth/frameHeight` 一致
+- 幂等复验通过
+
+变化来自 `motion_2d.RECIPE`：走路 10 帧、跳跃 8 帧（GIF 编码合并末帧后落地 7 帧），
+帧率提到 15 是因为 12fps × 13 帧的走路循环要 1.08s，用户实测反馈「有点慢」。
+
+**容器内 Mesa 软渲染路径已随本次复测一并验证**：worker 用 `RENDER_USE_MESA=true`
+成功渲出 10/8 帧，说明 `flat2d.yaml` 的 retarget 配置与新加的 `CAMERA_POS` 在 OSMesa 下正常。
+
+两个踩到的坑记在这里：
+
+- **容器刚起来的头一两分钟不能上传**：TorchServe 模型还在加载，socat 会报
+  `Connection reset by peer`，`analyze()` 失败并返回 `needs_correction: ANALYZE_FAILED`。
+  这是时序问题不是缺陷，但排障时容易误判成代码问题——先看 worker 日志里有没有 socat 报错。
+- **宿主 `curl localhost:8080` 与容器内可达性是两件事**：TorchServe 容器 healthy（healthcheck
+  在容器内跑）而宿主访问被重置的情况确实出现过（Docker 端口转发状态问题，重建容器可恢复）。
+  业务链路走的是容器内 `torchserve:8080`，不受宿主端口转发影响，但 `smoke_e2e.sh` 的
+  健康检查是从宿主发起的，会因此提前退出。
