@@ -7,7 +7,8 @@ from pydantic import BaseModel, field_validator
 JobState = Literal['queued', 'processing', 'needs_correction', 'ready', 'failed']
 ErrorCode = Literal['FILE_TOO_LARGE', 'NOT_AN_IMAGE', 'UNSUPPORTED_FORMAT', 'JOB_NOT_FOUND',
                     'QUEUE_UNAVAILABLE', 'RENDER_TIMEOUT', 'RENDER_CRASHED', 'ASSET_MISSING', 'INTERNAL']
-CorrectionReason = Literal['NO_HUMANOID', 'NO_SKELETON', 'MULTIPLE_SKELETONS', 'NO_CONTOUR', 'ANALYZE_FAILED']
+CorrectionReason = Literal['NO_HUMANOID', 'NO_SKELETON', 'MULTIPLE_SKELETONS', 'NO_CONTOUR',
+                           'SKELETON_MISFIT', 'ANALYZE_FAILED']
 NON_TERMINAL_STATES = ('queued', 'processing')
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 
