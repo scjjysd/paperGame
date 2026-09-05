@@ -8,6 +8,13 @@
 #   bash scripts/setup-vendor.sh && docker compose up -d --build
 #   curl http://localhost:8080/ping             # {"status": "Healthy"}
 #   curl http://localhost:8000/healthz          # {"status":"ok"}
+#
+# GPU 开关（单文件，环境变量控制）：
+#   默认不启用 GPU（Mac 开发）：docker compose up -d
+#   启用 GPU（NAS 有 NVIDIA）：GPU_RUNTIME=nvidia docker compose up -d
+#     或在 server/.env 写一行 GPU_RUNTIME=nvidia（compose 自动加载，重启生效）
+#   前提：NAS 已装 nvidia-container-toolkit 并注册 nvidia runtime
+#     （nvidia-ctk runtime configure --runtime=docker && systemctl restart docker）
 
 services:
   torchserve:
@@ -16,6 +23,14 @@ services:
       dockerfile: Dockerfile
     image: paper-game/ad-torchserve:local
     container_name: ad-torchserve
+    # GPU 开关：默认 runc 完全不发起 GPU 请求（Mac 无 GPU 正常跑）；
+    # GPU_RUNTIME=nvidia 时走 nvidia runtime，容器内可见 GPU。
+    # 注：不采用 devices+count:0 方案——实测无 GPU 宿主机上 count=0 的设备请求
+    #     仍会报 "failed to discover GPU vendor from CDI"，故用 runtime 切换实现单文件开关。
+    runtime: ${GPU_RUNTIME:-runc}
+    environment:
+      # 仅 nvidia runtime 下生效；默认全部 GPU，可填具体序号/UUID 限定
+      NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
     ports:
       - "8080:8080"   # TorchServe 推理 API（涂鸦分析：检测/分割/骨架）
       - "8081:8081"   # TorchServe 管理 API
@@ -90,5 +105,6 @@ services:
     stop_grace_period: 300s   # >= SUBPROCESS_TIMEOUT(120s) x MAX_ATTEMPTS(2) + 余量，防 docker 默认 10s SIGKILL 打断渲染
     restart: unless-stopped
 
-# GPU 扩展位：未来 Linux+NVIDIA 部署时创建 docker-compose.override.yml，
-# 为 torchserve/worker 添加 gpu 资源声明（Mac 开发阶段用 Mesa 软渲染，无需 GPU）。
+# GPU 说明：通过上方 GPU_RUNTIME 环境变量切换（单文件实现，无需 override 文件）。
+# worker 渲染保持 Mesa 软渲染（GPU 环境也能正常工作）；
+# 如需 GPU 硬件渲染需 Xvfb+EGL 改造，收益小暂不启用。

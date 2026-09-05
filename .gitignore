@@ -22,4 +22,5 @@ testdata/output/
 .DS_Store
 /.idea/
 /.codegraph/
-/.qoder/
+/.claude/
+/CLAUDE.md
