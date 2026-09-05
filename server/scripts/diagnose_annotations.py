@@ -188,6 +188,9 @@ def report(img: Path, do_render: bool) -> dict:
                     info[f'{motion}_bad'] = True
                     continue
                 shape = _shape_fidelity(anno, gif) if rc == 0 and gif.exists() else float('nan')
+                # 形状窗口 0.90~1.15x 的依据：二维合成方案下 20 份样本实测 19 份落在
+                # 0.92~1.15x，唯一在窗外的 s19（0.71x）经目视确认确实变形（那张画本身
+                # 只是几根抽象线条）。frames < 6 是「配方最少 7 帧、少于 6 说明帧被合并或渲染断了」。
                 bad = '★退化' if rc or empty or frames < 6 or not 0.9 <= shape <= 1.15 else ''
                 line += f'  {motion}:丢pin={pins} 帧={frames} 空={empty} 形状={shape:.2f}x{bad}'
                 info[f'{motion}_pins'] = pins
