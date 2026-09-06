@@ -1,9 +1,9 @@
-"""角色任务接口：POST 上传入队（幂等），GET 轮询五态。"""
+"""角色任务接口：POST 上传入队（幂等，force=true 可强制重跑），GET 轮询五态。"""
 import json
 from typing import Optional
 
 import redis.exceptions
-from fastapi import APIRouter, File, Request, UploadFile
+from fastapi import APIRouter, File, Query, Request, UploadFile
 from fastapi.responses import JSONResponse
 
 from app import contracts
@@ -31,7 +31,8 @@ def _sniff(head: bytes) -> Optional[str]:
 
 
 @router.post('', status_code=202)
-async def create_character(request: Request, file: UploadFile = File(...)):
+async def create_character(request: Request, force: bool = Query(False),
+                           file: UploadFile = File(...)):
     store: JobStore = request.app.state.store
     content = await file.read(contracts.MAX_UPLOAD_BYTES + 1)
     if len(content) > contracts.MAX_UPLOAD_BYTES:
@@ -45,13 +46,16 @@ async def create_character(request: Request, file: UploadFile = File(...)):
     job_id = contracts.derive_job_id(content)
     try:
         existing = store.get(job_id)
-        if existing is not None:
+        if existing is not None and not force:
             # 非终态：不重复入队；终态：客户端轮询即可看到结果
             return contracts.JobAccepted(jobId=job_id).model_dump()
         job_dir = store.jobs_root / job_id
         job_dir.mkdir(parents=True, exist_ok=True)
         (job_dir / 'input.png').write_bytes(content)
-        store.create(job_id)
+        if existing is not None:
+            store.reset(job_id)   # force：清旧终态结果与产物后重新入队
+        else:
+            store.create(job_id)
         store.enqueue(job_id)
     except redis.exceptions.RedisError:
         return _error(503, 'QUEUE_UNAVAILABLE')

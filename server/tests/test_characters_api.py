@@ -28,6 +28,11 @@ def _upload(client, content: bytes, filename='c.png', content_type='image/png'):
                        files={'file': (filename, content, content_type)})
 
 
+def _upload_force(client, content: bytes = PNG_1PX):
+    return client.post('/v1/characters', params={'force': 'true'},
+                       files={'file': ('c.png', content, 'image/png')})
+
+
 def test_healthz(client):
     assert client.get('/healthz').json() == {'status': 'ok'}
 
@@ -48,6 +53,36 @@ def test_upload_idempotent_no_double_enqueue(client):
     second = _upload(client, PNG_1PX).json()['jobId']
     assert first == second
     assert client.app.state.store.r.llen('pq:characters') == 1
+
+
+def test_upload_force_re_enqueues_same_job(client):
+    job_id = _upload(client, PNG_1PX).json()['jobId']
+    store = client.app.state.store
+    store.set_status(job_id, 'needs_correction',
+                     result={'status': 'needs_correction', 'reason': 'NO_HUMANOID'})
+    resp = _upload_force(client)
+    assert resp.status_code == 202
+    assert resp.json()['jobId'] == job_id          # 同图同 jobId
+    assert store.r.llen('pq:characters') == 2      # force 绕过幂等短路重新入队
+    data = store.get(job_id)
+    assert data['status'] == 'queued'              # 终态被重置
+    assert 'result' not in data                    # 旧结果已丢弃
+
+
+def test_upload_force_clears_stale_artifacts(client, tmp_path):
+    job_id = _upload(client, PNG_1PX).json()['jobId']
+    store = client.app.state.store
+    job_dir = tmp_path / 'jobs' / job_id
+    (job_dir / 'result.json').write_text('{"status":"ready"}')
+    (job_dir / 'run.png').write_bytes(PNG_1PX)
+    (job_dir / 'anno').mkdir()
+    (job_dir / 'anno' / 'mask.png').write_bytes(PNG_1PX)
+    store.set_status(job_id, 'ready', result={'status': 'ready'})
+    assert _upload_force(client).status_code == 202
+    assert not (job_dir / 'result.json').exists()
+    assert not (job_dir / 'run.png').exists()
+    assert not (job_dir / 'anno').exists()
+    assert (job_dir / 'input.png').exists()        # 入图保留并被覆写
 
 
 def test_upload_too_large(client):

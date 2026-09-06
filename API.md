@@ -43,7 +43,7 @@
 
 ### 2.2 `POST /v1/characters` — 上传涂鸦，入队渲染
 
-请求：`multipart/form-data`，**字段名必须是 `file`**。
+请求：`multipart/form-data`，**字段名必须是 `file`**。可选查询参数 `force=true` 强制重跑（见下）。
 
 ```
 POST /v1/characters
@@ -63,6 +63,8 @@ Content-Type: image/png
 ```
 
 **jobId 由文件内容决定**：`"char_" + sha256(文件字节).hexdigest()[:12]`。因此同一张图无论上传多少次都得到同一个 jobId，且已存在的任务不会重复入队 —— 客户端可以放心重传（弱网重试、用户重复点击）而不会产生重复渲染。已完成的任务重传后立即可查到终态。
+
+**强制重跑 `?force=true`**：默认幂等短路下，同一张图不会重新渲染。加 `force=true` 可绕过短路：服务端丢弃该 jobId 的旧终态结果与磁盘产物（`result.json`、`run/jump.png`、`run/jump.gif`、`anno/`），状态重置为 `queued` 并重新入队，响应仍是 `202 {"jobId": ...}`（jobId 不变）。适用于「图没变但想重渲」「旧任务失败/needs_correction 想重试」的场景。注意：对正在 `processing` 的任务 force 会额外多跑一次，属预期行为。
 
 错误：
 

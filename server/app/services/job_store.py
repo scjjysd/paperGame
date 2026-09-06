@@ -1,5 +1,6 @@
 """任务状态存储：Redis Hash（TTL 24h）+ 队列 List；result.json 为 Redis 过期后的兜底。"""
 import json
+import shutil
 import time
 from pathlib import Path
 from typing import Optional
@@ -10,6 +11,8 @@ QUEUE_KEY = 'pq:characters'
 JOB_KEY = 'job:{}'
 TTL_SECONDS = 24 * 3600
 TERMINAL_STATES = frozenset({'ready', 'needs_correction', 'failed'})
+# force 重跑时需清掉的旧产物（input.png 由 API 覆写，不在清理之列）
+RERUN_ARTIFACTS = ('result.json', 'run.png', 'run.gif', 'jump.png', 'jump.gif', 'anno')
 
 
 def _now() -> str:
@@ -45,6 +48,23 @@ class JobStore:
             mapping['result'] = json.dumps(result, ensure_ascii=False)
         self.r.hset(key, mapping=mapping)
         self.r.expire(key, TTL_SECONDS)
+
+    def reset(self, job_id: str) -> None:
+        """force 重跑：丢弃旧终态结果与磁盘产物，状态回到 queued 并刷新 TTL。
+
+        必须先于 enqueue 调用；状态离开终态后 worker 的 set_status 才能再次写入。
+        """
+        key = JOB_KEY.format(job_id)
+        self.r.hdel(key, 'result')
+        self.r.hset(key, mapping={'status': 'queued', 'updatedAt': _now()})
+        self.r.expire(key, TTL_SECONDS)
+        job_dir = self.jobs_root / job_id
+        for name in RERUN_ARTIFACTS:
+            p = job_dir / name
+            if p.is_dir():
+                shutil.rmtree(p, ignore_errors=True)
+            elif p.exists():
+                p.unlink()
 
     def get(self, job_id: str) -> Optional[dict]:
         data = self.r.hgetall(JOB_KEY.format(job_id))
