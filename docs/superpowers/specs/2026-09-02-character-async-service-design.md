@@ -1,6 +1,6 @@
 # 角色异步服务化（P0 任务 3）设计
 
-> 对应 `2026-09-01-paper-game-p0.md` 任务 3 与服务端工作包 S2。
+> 对应 `docs/plans/2026-09-01-paper-game-p0.md` 任务 3 与服务端工作包 S2。
 > 前置：动画管线尖刺已验收通过（20/20 成功，单张最大 18.1s，见 `docs/animation-spike-results.md`）。
 > 范围：把单机函数调用的 `CharacterPipeline.render_character()` 服务化为异步 HTTP 接口；不含对象存储、不含 Unity 客户端、不含关卡接口（P0 任务 4-7）。
 

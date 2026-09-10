@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "paper-game-server"
+version = "0.1.0"
+description = "纸上游戏机服务端：角色动画生成 + 手绘关卡解析"
+requires-python = ">=3.9"
+dependencies = [
+    "numpy==1.24.4",
+    "scipy==1.10.0",
+    "scikit-image==0.19.3",
+    "scikit-learn==1.1.2",
+    "shapely==1.8.5.post1",
+    "opencv-python==4.6.0.66",
+    "Pillow==10.1.0",
+    "glfw==2.5.5",
+    "PyOpenGL==3.1.6",
+    "PyYAML==6.0.1",
+    "requests==2.31.0",
+    "tqdm==4.66.3",
+    "fastapi>=0.110,<1.0",
+    "uvicorn>=0.29",
+    "redis>=5.0,<6.0",
+    "python-multipart>=0.0.9",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "fakeredis>=2.21",
+    "httpx>=0.27",
+]
+
+[tool.setuptools]
+packages = ["app"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+# test_spike_batch.py 耗时长且需 TorchServe 在线，常规回归排除
+addopts = "--ignore=tests/test_spike_batch.py"

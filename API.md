@@ -2,7 +2,7 @@
 
 孩子在纸上画的火柴人 → 上传 → 服务端异步渲染 → 返回透明 RGBA 精灵表 + 切帧元数据 → Unity 直接切帧播放。
 
-**契约唯一真源是 `server/app/contracts.py`**。本文档按该文件与实际代码路径编写，字段有出入时以代码为准。Unity 侧 `GameContracts.cs` 应照它逐字镜像（第 7 节给出 DTO）。
+**契约唯一真源是 `app/contracts.py`**。本文档按该文件与实际代码路径编写，字段有出入时以代码为准。Unity 侧 `GameContracts.cs` 应照它逐字镜像（第 7 节给出 DTO）。
 
 最后核对：2026-09-05，分支 `feat/2d-motion-synthesis`。
 
@@ -314,7 +314,7 @@ POST ──202──> queued ──> processing ──┬──> ready          
 **用 Newtonsoft.Json**（`com.unity.nuget.newtonsoft-json`）。Unity 自带的 `JsonUtility` 不支持 `Dictionary`，`animations` 会解析成空 —— 这是最容易踩的坑。
 
 ```csharp
-// GameContracts.cs —— 逐字镜像 server/app/contracts.py，改契约需前后端共同确认
+// GameContracts.cs —— 逐字镜像 app/contracts.py，改契约需前后端共同确认
 using System.Collections.Generic;
 
 public static class GameContracts {

@@ -1,0 +1,20 @@
+.venv/
+out/
+__pycache__/
+*.pyc
+vendor/AnimatedDrawings/.git/
+tests/
+# 根目录下的非运行时内容（build context 是仓库根）
+.git/
+.idea/
+.codegraph/
+.claude/
+.codex/
+.superpowers/
+.pytest_cache/
+docs/
+testdata/
+C1Levels/
+*.md
+.mcp.json
+.DS_Store

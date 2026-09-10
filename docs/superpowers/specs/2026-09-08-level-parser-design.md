@@ -10,7 +10,7 @@
 
 - 已读取：`level-image-to-json-api.md` — Level API v1 协议：五态状态机、响应信封、level JSON Schema、幂等规则、错误码
 - 已读取：`level-image-to-json-server-handoff.md` — 服务端交接：OpenCV/LLM 职责边界、处理流水线、验收指标、P0-P3 实施阶段
-- 已读取：`C1Levels/level1.json` + `level1-background.png` — Unity 侧在用的静态样例（人工校准的 7 条平台 + 75×90 终点区域，1245×810），作为黄金真值
+- 已读取：`testdata/levels/golden/level1.json` + `level1-background.png` — Unity 侧在用的静态样例（人工校准的 7 条平台 + 75×90 终点区域，1245×810），作为黄金真值
 - 已读取：`server/app/contracts.py`、`app/api/characters.py`、`app/services/job_store.py`、`app/workers/character_worker.py`、`app/workers/render_runner.py` — 需要镜像的既有异步任务模式
 - 适用硬约束：vendor 零改动；Python 3.9（`Optional[X]` 而非 `X | None`）；依赖钉死不升级（numpy 1.24.4 / Pillow 10.1.0 / opencv 4.6.0.66）；`app/` 禁止 import `scripts/`；跨进程路径绝对化；阈值常数须注明验证样本与重标定条件
 - 影响模块：`app/main.py`（挂路由）、`app/services/job_store.py`（参数化）、新增 `app/level_contracts.py`、`app/api/levels.py`、`app/services/level_*.py`、`app/services/playability.py`、`app/workers/level_worker.py`、`app/workers/level_runner.py`、`docker-compose.yml`（levels worker 服务）
@@ -22,7 +22,7 @@
 |---|---|
 | 实施范围 | P0+P1+P2 全量（异步任务+拉正+平台检测+旗帜+出生点+可玩性）；P3 生产化（鉴权/限流/对象存储/隐私删除）不在本次 |
 | 纸张拉正 | 在本仓库用 OpenCV 重写（Unity 仓库的 `Tools/PaperLevel/` 不搬代码），按交接文档 7.2 基线流程 |
-| 测试样本 | 合成样本（固定 seed 脚本生成，真值由构造给出）进 CI；`C1Levels/level1-background.png`+`level1.json` 作黄金真值对拍 |
+| 测试样本 | 合成样本（固定 seed 脚本生成，真值由构造给出）进 CI；`testdata/levels/golden/level1-background.png`+`level1.json` 作黄金真值对拍 |
 | LLM 语义复核 | 直接接入，OpenAI 兼容端点（base_url/api_key/model 全环境变量），不可用时降级纯 OpenCV |
 | 任务基础设施 | 方案 A：JobStore 参数化（queue_key/terminal_states/rerun_artifacts，默认值=角色现状），其余平行镜像角色链路 |
 

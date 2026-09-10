@@ -4,12 +4,14 @@ __pycache__/
 .venv/
 venv/
 .pytest_cache/
+*.egg-info/
+uv.lock
 
-# 第三方源码（由 scripts/setup-vendor.sh 拉取，不入库）
-server/vendor/
+# 第三方源码（由 scripts/setup/setup-vendor.sh 拉取，不入库）
+vendor/
 
 # 尖刺产物与中间文件
-server/out/
+out/
 *.mp4
 *.gif
 testdata/output/
@@ -20,6 +22,7 @@ testdata/output/
 # IDE / OS
 .idea/workspace.xml
 .DS_Store
+*.iml
 /.idea/
 /.codegraph/
 /.claude/

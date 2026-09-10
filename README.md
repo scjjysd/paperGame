@@ -106,46 +106,75 @@ Unity/浏览器                     api 容器                    redis         
 ```text
 jjhks/
 ├── README.md                        ← 本文件
-├── 2026-09-01-paper-game-p0.md      ★ P0 总计划：8 个任务 + 10 日排期 + 三段 MVP 验收链路
+├── AGENTS.md                        AI 开发规范
+├── CLAUDE.md                        Claude 引导
+├── API.md                           Unity 客户端接口文档
+├── level-image-to-json-api.md       关卡 API v1 协议
+├── level-image-to-json-server-handoff.md  服务端交接文档
+├── pyproject.toml                   Python 项目配置（依赖 + pytest）
+├── conftest.py                      根级 pytest 配置
 ├── docs/
 │   ├── animation-spike-results.md   ★ 任务 2 验收记录：20 样本逐张耗时、残留项清单
 │   ├── async-service-smoke-results.md ★ 任务 3 冒烟与回归结论
 │   └── superpowers/
-│       ├── specs/                   两份设计规格（管线 / 异步服务化）
-│       └── plans/                   两份实现计划（含 TDD 步骤与已核实的接口事实）
-├── testdata/characters/             ★ s01-s20.png 验收样本（已入库，见下方授权说明）
-└── server/                          ★ 全部服务端代码
-    ├── app/
-    │   ├── main.py                  FastAPI 应用工厂：路由 + /artifacts 静态挂载 + /healthz
-    │   ├── contracts.py             ★ Pydantic 契约：五态、错误码、六键动画元数据、derive_job_id
-    │   ├── api/characters.py        POST 上传入队（幂等）/ GET 轮询
-    │   ├── services/
-    │   │   ├── annotations.py       ① vendor 包装层：异常 → NeedsCorrection
-    │   │   ├── annotation_repair.py ①.5 扩框重裁 + mask 重建 + 关节吸附 + 门禁 + 网格降级阶梯
-    │   │   ├── render_scene.py      ② 场景 YAML 生成 + 渲染；Mesa 开关；motion 路径自愈
-    │   │   ├── sprite_sheet.py      ③ GIF → 透明 PNG 精灵表 + footAnchor
-    │   │   ├── character_pipeline.py ★ 管线门面 render() / render_character()
-    │   │   └── job_store.py         Redis Hash(TTL 24h) + List 队列 + result.json 兜底
-    │   ├── workers/
-    │   │   ├── character_worker.py  BRPOP 主循环：超时 120s、重试 1 次、SIGTERM 优雅退出
-    │   │   └── render_runner.py     子进程入口：渲染 → 搬运产物 → 写 result.json（退出码协议）
-    │   └── assets/motions/          ★ run.bvh/run.yaml、jump.bvh/jump.yaml + README（来源与调参结论）
-    ├── scripts/                     验证脚本区（可 import app；反向禁止）
-    │   ├── setup-vendor.sh          幂等克隆 AnimatedDrawings 到 vendor/
-    │   ├── setup_env.sh             建宿主 .venv + pip install -e vendor
-    │   ├── render_smoke.py          容器内 Mesa 渲染 go/no-go 尖刺
-    │   ├── smoke_e2e.sh           ★ 全栈端到端冒烟（上传→轮询→下载验 PNG→幂等复验）
-    │   ├── decimate_bvh.py          BVH 抽稀（可复用）
-    │   ├── diagnose_annotations.py  ★ 标注质量验收：一键产出丢失率/关节偏移/丢 pin 三项指标（`--render` 含实渲）
-    │   └── download_samples.py      官方示例涂鸦下载（正式样本已入库，仅留档）
-    ├── tests/                       63 个用例（62 回归 + 1 尖刺验收）
-    ├── docker-compose.yml         ★ 4 容器编排：torchserve / redis / api / worker
-    ├── Dockerfile                   api 与 worker 共享镜像（python:3.9-slim + OSMesa）
-    ├── docker/entrypoint.sh         socat 把容器内 localhost:8080 转发到 torchserve:8080
-    ├── requirements-service.txt     镜像内运行时依赖（vendor 子集，不含 torch，省 ~800MB）
-    ├── requirements-dev.txt         宿主开发/测试依赖
-    ├── vendor/                      AnimatedDrawings 源码（.gitignore，由 setup-vendor.sh 拉取）
-    └── out/                         产物与中间文件（.gitignore）：jobs/ spike/ mesa-spike/ ...
+│       ├── specs/                   设计规格（管线 / 异步服务化 / 关卡解析）
+│       └── plans/                   实现计划（含 TDD 步骤与已核实的接口事实）
+├── testdata/
+│   ├── characters/                  ★ s01-s20.png 验收样本（已入库，见下方授权说明）
+│   └── levels/                      关卡样本
+│       ├── synthetic/               合成样本（CI 离线测试）
+│       ├── contracts/               契约样例（6 份 JSON）
+│       └── golden/                  黄金真值（Unity 侧对拍，原 C1Levels）
+├── app/                             ★ 全部服务端应用代码
+│   ├── main.py                      FastAPI 应用工厂：路由 + /artifacts 静态挂载 + /healthz
+│   ├── contracts.py                 ★ Pydantic 契约：五态、错误码、六键动画元数据、derive_job_id
+│   ├── level_contracts.py           关卡契约：LevelReady/NeedsFix/NeedsReview/Failed
+│   ├── api/                         路由层：characters / levels / character_view
+│   ├── services/
+│   │   ├── annotations.py           ① vendor 包装层：异常 → NeedsCorrection
+│   │   ├── annotation_repair.py     ①.5 扩框重裁 + mask 重建 + 关节吸附 + 门禁 + 网格降级阶梯
+│   │   ├── motion_2d.py             ①.7 按画合成纯二维 BVH（首帧掰动 0°）
+│   │   ├── render_scene.py          ② 场景 YAML 生成 + 渲染；Mesa 开关；motion 路径自愈
+│   │   ├── sprite_sheet.py          ③ GIF → 透明 PNG 精灵表 + footAnchor
+│   │   ├── character_pipeline.py    ★ 管线门面 render() / render_character()
+│   │   ├── job_store.py             Redis Hash(TTL 24h) + List 队列 + result.json 兜底
+│   │   ├── level_rectify.py         A4 纸张拉正（OpenCV 透视变换）
+│   │   ├── level_detect.py          平台/红旗候选检测
+│   │   ├── level_semantic.py        可选 LLM 语义复核
+│   │   ├── level_parser.py          关卡解析门面
+│   │   └── playability.py           可玩性校验：出生点/终点承载、跳跃图可达性
+│   ├── workers/
+│   │   ├── character_worker.py      BRPOP 主循环：超时 120s、重试 1 次、SIGTERM 优雅退出
+│   │   ├── render_runner.py         子进程入口：渲染 → 搬运产物 → 写 result.json（退出码协议）
+│   │   ├── level_worker.py          关卡队列消费
+│   │   └── level_runner.py          关卡解析子进程入口
+│   └── assets/motions/              ★ run.bvh/run.yaml、jump.bvh/jump.yaml + README（来源与调参结论）
+├── scripts/                         验证脚本区（可 import app；反向禁止）
+│   ├── setup/                       环境设置（首次必做）
+│   │   ├── setup-vendor.sh          幂等克隆 AnimatedDrawings 到 vendor/
+│   │   └── setup_env.sh             建宿主 .venv + pip install -e vendor
+│   ├── smoke/                       冒烟测试（端到端验证）
+│   │   ├── smoke_e2e.sh             ★ 全栈端到端冒烟（上传→轮询→下载验 PNG→幂等复验）
+│   │   ├── smoke_levels_e2e.sh      关卡全栈冒烟
+│   │   └── render_smoke.py          容器内 Mesa 渲染 go/no-go 尖刺
+│   ├── tools/                       可复用工具
+│   │   ├── decimate_bvh.py          BVH 抽稀
+│   │   └── gen_level_samples.py     关卡合成样本生成（固定 seed）
+│   ├── diag/                        诊断/验收（人工审查）
+│   │   ├── diagnose_annotations.py  ★ 标注质量验收：七项指标（`--render` 含实渲）
+│   │   ├── review_batch.py          批量渲染审查页（人工目视验收）
+│   │   └── compare_projection.py    投影面对比动图（评估用）
+│   └── archive/                     归档（一次性/历史）
+│       └── download_samples.py      官方示例涂鸦下载（正式样本已入库，仅留档）
+├── tests/                           测试用例（pytest，常规回归排除 test_spike_batch.py）
+├── docker/
+│   └── entrypoint.sh                socat 把容器内 localhost:8080 转发到 torchserve:8080
+├── Dockerfile                       api 与 worker 共享镜像（python:3.9-slim + OSMesa）
+├── docker-compose.yml               ★ 5 容器编排：torchserve / redis / api / worker / level-worker
+├── requirements-service.txt         镜像内运行时依赖（vendor 子集，不含 torch，省 ~800MB）
+├── requirements-dev.txt             宿主开发/测试依赖
+├── vendor/                          AnimatedDrawings 源码（.gitignore，由 setup-vendor.sh 拉取）
+└── out/                             产物与中间文件（.gitignore）：jobs/ spike/ mesa-spike/ ...
 ```
 
 标 ★ 的是最该先读的文件。
@@ -189,7 +218,7 @@ api 与 worker **分开部署**：故障域隔离、可独立 restart、可 `--s
 ### 5.4 产物存储布局
 
 ```text
-server/out/jobs/{jobId}/
+out/jobs/{jobId}/
 ├── input.png        上传原图
 ├── anno/            mask.png / texture.png / char_cfg.yaml（needs_correction 时供骨架确认页用）
 ├── run.png          run 精灵表（3107×339 RGBA，13 帧）
@@ -202,7 +231,7 @@ server/out/jobs/{jobId}/
 关卡任务复用同一目录，按终态发布以下文件：
 
 ```text
-server/out/jobs/{levelJobId}/
+out/jobs/{levelJobId}/
 ├── input.png          EXIF 归一化后的上传图
 ├── request.json       实际 playabilityProfile 与任务时间戳
 ├── rectified.png      拉正后的权威背景
@@ -251,7 +280,7 @@ curl -sS http://localhost:8000/v1/levels/level_...
 # queued/processing，或 ready/needs_fix/needs_review/failed 终态信封
 ```
 
-关卡任务由独立 `level-worker` 消费 `pq:levels`。全栈现为 5 容器：`torchserve`、`redis`、`api`、`worker`、`level-worker`；关卡实机验收运行 `bash scripts/smoke_levels_e2e.sh`，成功标记为 `SMOKE_LEVELS_E2E_PASS`。可选 LLM 复核仅在同时配置 `LEVEL_LLM_BASE_URL`（必须 HTTPS）、`LEVEL_LLM_API_KEY`、`LEVEL_LLM_MODEL` 时启用；缺失、配置错误、请求失败或响应无效时无损降级为纯 OpenCV，LLM 和可玩性分析都不能创建、移动或延长平台坐标。
+关卡任务由独立 `level-worker` 消费 `pq:levels`。全栈现为 5 容器：`torchserve`、`redis`、`api`、`worker`、`level-worker`；关卡实机验收运行 `bash scripts/smoke/smoke_levels_e2e.sh`，成功标记为 `SMOKE_LEVELS_E2E_PASS`。可选 LLM 复核仅在同时配置 `LEVEL_LLM_BASE_URL`（必须 HTTPS）、`LEVEL_LLM_API_KEY`、`LEVEL_LLM_MODEL` 时启用；缺失、配置错误、请求失败或响应无效时无损降级为纯 OpenCV，LLM 和可玩性分析都不能创建、移动或延长平台坐标。
 
 Level v1 已知边界：只支持单张横版纸、近水平直平台和单一红旗；输入限 JPEG/PNG、10 MiB、边长 800–12000、最多 4000 万像素；无鉴权/限流/对象存储；`force=true` 复用同一 jobId；真实拍摄和 Unity 任务 6–7 尚未验收。
 
@@ -285,12 +314,12 @@ Level v1 已知边界：只支持单张横版纸、近水平直平台和单一�
 
 `joints` 正常路径固定 **16 项**；早期失败（`NO_HUMANOID`/`NO_CONTOUR` 等，此时 `char_cfg.yaml` 尚未生成）**为空数组**，客户端以 `reason` 提示重拍。`contracts.py` 的校验器显式允许 `16 或 0` 两种长度。
 
-### 6.3 枚举全集（`server/app/contracts.py` 为唯一真源）
+### 6.3 枚举全集（`app/contracts.py` 为唯一真源）
 
 - `JobState`：`queued` `processing` `needs_correction` `ready` `failed`
 - `ErrorCode`：`FILE_TOO_LARGE` `NOT_AN_IMAGE` `UNSUPPORTED_FORMAT` `JOB_NOT_FOUND` `QUEUE_UNAVAILABLE` `RENDER_TIMEOUT` `RENDER_CRASHED` `ASSET_MISSING` `INTERNAL`
 - `CorrectionReason`：`NO_HUMANOID` `NO_SKELETON` `MULTIPLE_SKELETONS` `NO_CONTOUR` `SKELETON_MISFIT` `ANALYZE_FAILED`
-- 关卡任务态：`queued` `processing` `ready` `needs_fix` `needs_review` `failed`；可玩性结论为 `playable` `unreachable` `uncertain`，唯一真源是 `server/app/level_contracts.py`。
+- 关卡任务态：`queued` `processing` `ready` `needs_fix` `needs_review` `failed`；可玩性结论为 `playable` `unreachable` `uncertain`，唯一真源是 `app/level_contracts.py`。
 
 Unity 侧 `GameContracts.cs` 将来照 `contracts.py` 逐字镜像，客户端禁止使用匿名 JSON。
 
@@ -298,7 +327,7 @@ Unity 侧 `GameContracts.cs` 将来照 `contracts.py` 逐字镜像，客户端�
 
 ## 7. 动作资产（run / jump）
 
-来源与调参结论完整记录在 [`server/app/assets/motions/README.md`](server/app/assets/motions/README.md)，要点：
+来源与调参结论完整记录在 [`app/assets/motions/README.md`](app/assets/motions/README.md)，要点：
 
 | 资产 | CMU 源文件 | 抽稀参数 | 帧数 | 说明 |
 |---|---|---|---|---|
@@ -325,11 +354,10 @@ FPS 固定 12。帧尺寸取该角色**所有动作**帧内容包围盒的并集
 - **网络代理（本机实测必需）**：本机无法直连 docker.io，须在 Docker Desktop → Settings → Resources → Proxies 配置手动代理 `http://host.docker.internal:7890`（**不能用 `127.0.0.1`**，构建在 VM 内执行）；shell 里 `export all_proxy` 对守护进程无效。
 - 首次构建镜像约 5-7 分钟。
 
-### 8.2 起全栈（4 容器）
+### 8.2 起全栈（5 容器）
 
 ```bash
-cd server
-bash scripts/setup-vendor.sh          # 幂等克隆 AnimatedDrawings 到 vendor/
+bash scripts/setup/setup-vendor.sh          # 幂等克隆 AnimatedDrawings 到 vendor/
 docker compose up -d --build
 curl http://localhost:8080/ping       # {"status": "Healthy"}
 curl http://localhost:8000/healthz    # {"status":"ok"}
@@ -338,9 +366,8 @@ curl http://localhost:8000/healthz    # {"status":"ok"}
 ### 8.3 端到端冒烟
 
 ```bash
-cd server
-bash scripts/smoke_e2e.sh                       # 默认用 ../testdata/characters/s01.png
-API_BASE=http://localhost:8000 bash scripts/smoke_e2e.sh /path/to/doodle.png
+bash scripts/smoke/smoke_e2e.sh                       # 默认用 testdata/characters/s01.png
+API_BASE=http://localhost:8000 bash scripts/smoke/smoke_e2e.sh /path/to/doodle.png
 ```
 
 脚本会走完：健康检查 → 上传 → 每 5s 轮询（上限 180s）→ `ready` → 下载 run/jump 精灵表并用 PIL 断言 RGBA → 同图重复提交验幂等，最终输出 `SMOKE_E2E_PASS jobId=... elapsed=..s`。实测 20s 完成。
@@ -348,7 +375,7 @@ API_BASE=http://localhost:8000 bash scripts/smoke_e2e.sh /path/to/doodle.png
 ### 8.4 手动调一次
 
 ```bash
-curl -F "file=@../testdata/characters/s01.png" http://localhost:8000/v1/characters
+curl -F "file=@testdata/characters/s01.png" http://localhost:8000/v1/characters
 curl http://localhost:8000/v1/characters/char_9c3ff81ce4ea
 open http://localhost:8000/artifacts/char_9c3ff81ce4ea/run.png
 ```
@@ -356,21 +383,20 @@ open http://localhost:8000/artifacts/char_9c3ff81ce4ea/run.png
 ### 8.5 宿主侧开发环境（不走容器，直调管线）
 
 ```bash
-cd server
-bash scripts/setup-vendor.sh
-bash scripts/setup_env.sh                       # 建 .venv + pip install -e vendor + dev 依赖
+bash scripts/setup/setup-vendor.sh
+bash scripts/setup/setup_env.sh                       # 建 .venv + pip install -e vendor + dev 依赖
 source .venv/bin/activate
 docker compose up -d torchserve                 # ① 分析仍依赖 TorchServe
-python -m pytest tests/ -v --ignore=tests/test_spike_batch.py
+pytest tests/ -v                                # pyproject.toml 已配置 pythonpath，可直接用 pytest
 ```
 
-注意必须用 `python -m pytest`（把 cwd 加进 `sys.path`），仓库当前无 `conftest.py`。
+仓库已配置 `pyproject.toml` 与根级 `conftest.py`，`pytest` 或 `python -m pytest` 均可。
 
 ---
 
 ## 9. 测试地图
 
-`server/tests/` 共 **63 个用例**：62 个服务层回归 + 1 个尖刺验收。
+`tests/` 共 **63 个用例**：62 个服务层回归 + 1 个尖刺验收。
 
 | 文件 | 用例数 | 覆盖内容 | 外部依赖 |
 |---|---|---|---|
@@ -408,7 +434,7 @@ python -m pytest tests/ -v --ignore=tests/test_spike_batch.py
 | 3 | **motion YAML 里的相对路径在 chdir 后解析失败** | `_resolve_motion_cfg()` 自愈重写为绝对路径，产物 `*.resolved.yaml` 已 gitignore |
 | 4 | **GIF 拆帧必须逐帧 `convert('RGBA')`** | 对整个 Image 一次性 `convert` 会丢失动画帧，只剩第一帧 |
 | 5 | **vendor 零改动** | `image_to_annotations` 硬编码 `localhost:8080`，用 entrypoint 里的 socat 转发解决，而不是改源码 |
-| 6 | **脚本区 / 服务区硬分离** | `server/scripts/` 可以 import `app`；`server/app/` **禁止** import `scripts` |
+| 6 | **脚本区 / 服务区硬分离** | `scripts/` 可以 import `app`；`app/` **禁止** import `scripts` |
 | 7 | **OpenGL 上下文偶发初始化失败** | 尖刺首跑曾 20/20 全挂（伴随 `GLFWError: NSGL: Failed to find a suitable pixel format`），重跑恢复。已由子进程隔离 + 重试 1 次覆盖 |
 | 8 | **Python 3.9 不支持 `str \| None` 运行时注解** | 统一用 `Optional[str]`（容器基础镜像 `python:3.9-slim`） |
 | 9 | **`docker compose stop` 默认 10s SIGKILL** | 会打断渲染。worker 已设 `stop_grace_period: 300s`，且捕获 SIGTERM 走优雅退出 |
@@ -448,7 +474,7 @@ python -m pytest tests/ -v --ignore=tests/test_spike_batch.py
 
 ### 仍待处理的残留项
 
-- **真实儿童画复测**：当前用简笔画代理样本裁决，产品验收前建议以真实儿童涂鸦（家长授权）复测，并用 `scripts/diagnose_annotations.py --render` 重标定 `MAX_JOINT_OFFSET` 与 `PAD_RATIO`。
+- **真实儿童画复测**：当前用简笔画代理样本裁决，产品验收前建议以真实儿童涂鸦（家长授权）复测，并用 `scripts/diag/diagnose_annotations.py --render` 重标定 `MAX_JOINT_OFFSET` 与 `PAD_RATIO`。
 - **s08/s10/s11/s15 仍各有 2 个 pin 被丢**（s08 原为 22），未归零；归零需改 vendor 的网格密度（已评估为低优先级）。
 - **s09 双腿交叉一团无法修**（双膝间距 10px、左右腿长 18.7% vs 8.6%），经人工确认可接受，故**未加退化门禁**（加了会误杀）。
 - **无头/CI 渲染**：`use_mesa=True` 路线已在容器内验证；纯 CI 环境未验证。
@@ -462,14 +488,14 @@ python -m pytest tests/ -v --ignore=tests/test_spike_batch.py
 | 文件 | 读它的时机 |
 |---|---|
 | [`API.md`](API.md) | **要给 Unity 接客户端**：全部端点、字段类型、精灵表切帧与脚底锚点、错误码、C# DTO、已知边界（CORS / 无鉴权）|
-| [`2026-09-01-paper-game-p0.md`](2026-09-01-paper-game-p0.md) | 想知道整体目标、8 个任务、10 日排期、前后端职责边界、三段 MVP 验收链路 |
+| [`docs/plans/2026-09-01-paper-game-p0.md`](docs/plans/2026-09-01-paper-game-p0.md) | 想知道整体目标、8 个任务、10 日排期、前后端职责边界、三段 MVP 验收链路 |
 | [`docs/superpowers/specs/2026-09-01-doodle-animation-pipeline-design.md`](docs/superpowers/specs/2026-09-01-doodle-animation-pipeline-design.md) | 想知道动画管线为什么选 AnimatedDrawings 自部署、输出契约、失败处理 |
 | [`docs/superpowers/plans/2026-09-01-doodle-animation-pipeline.md`](docs/superpowers/plans/2026-09-01-doodle-animation-pipeline.md) | 想按 TDD 步骤重走一遍管线实现；含**已对 vendor 源码核实的接口事实**（勿再猜测） |
 | [`docs/superpowers/specs/2026-09-02-character-async-service-design.md`](docs/superpowers/specs/2026-09-02-character-async-service-design.md) | 想知道服务化的 compose 拓扑、队列/状态存储、worker 韧性、测试策略、裁定理由 |
 | [`docs/superpowers/plans/2026-09-02-character-async-service.md`](docs/superpowers/plans/2026-09-02-character-async-service.md) | 想看服务化 8 个任务的逐步实现与全局约束清单 |
 | [`docs/animation-spike-results.md`](docs/animation-spike-results.md) | 想知道尖刺验收数据与残留项清单 |
 | [`docs/async-service-smoke-results.md`](docs/async-service-smoke-results.md) | 想知道冒烟与回归结论、下一步 |
-| [`server/app/assets/motions/README.md`](server/app/assets/motions/README.md) | 想换动作资产、调 motion YAML、或搞清 BVH 来源与抽稀参数 |
+| [`app/assets/motions/README.md`](app/assets/motions/README.md) | 想换动作资产、调 motion YAML、或搞清 BVH 来源与抽稀参数 |
 
 ---
 

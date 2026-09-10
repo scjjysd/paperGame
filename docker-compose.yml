@@ -1,0 +1,143 @@
+# 纸上游戏机 · 角色异步服务全栈（S1 尖刺 + 角色异步服务）
+# 管理 TorchServe 推理服务、Redis 队列、FastAPI 服务与渲染 worker。
+#
+# 启动前先执行 scripts/setup/setup-vendor.sh 拉取 AnimatedDrawings 源码，
+# 首次构建镜像约 5-7 分钟，请为 Docker 分配至少 16GB 内存。
+#
+#   bash scripts/setup/setup-vendor.sh && docker compose up -d --build
+#   curl http://localhost:8080/ping             # {"status": "Healthy"}
+#   curl http://localhost:8000/healthz          # {"status":"ok"}
+#
+# GPU 开关（单文件，环境变量控制）：
+#   默认不启用 GPU：docker compose up -d          ← 现阶段唯一可用配置
+#   ⚠️ 现阶段不要开 GPU_RUNTIME=nvidia：镜像内 mmcv-full 1.7.0 是「无 CUDA kernel」的源码编译版
+#      （openmmlab 的 cu117/torch2.0.0 轮子索引里只有 1.7.2，mim 找不到 1.7.0 预编译轮子而退化为
+#        源码编译；基镜像 continuumio/miniconda3 无 nvcc → MMCV_WITH_CUDA 未定义 → 只注册 CPU 实现）。
+#      而 torch==2.0.0 的 PyPI 默认轮子本身带 CUDA，容器一看得见 GPU，mmdet/mmpose 的 handler 就按
+#        torch.cuda.is_available() 把模型搬到 cuda:0（不看 TorchServe 分配的 gpu_id），推理走到 NMS 抛
+#        "nms_impl: implementation for dev`ice cuda:0 not found." → /predictions 全部 503。
+#      必须保留 nvidia runtime 时，给本服务加 CUDA_VISIBLE_DEVICES: "" 把 GPU 从 torch 视野藏掉，退回 CPU。
+#      真要 GPU 加速见文末说明。
+
+services:
+  torchserve:
+    build:
+      context: vendor/AnimatedDrawings/torchserve
+      dockerfile: Dockerfile
+    image: paper-game/ad-torchserve:local
+    container_name: ad-torchserve
+    # GPU 开关：默认 runc 完全不发起 GPU 请求（Mac 无 GPU 正常跑）；
+    # GPU_RUNTIME=nvidia 时走 nvidia runtime，容器内可见 GPU。
+    # 注：不采用 devices+count:0 方案——实测无 GPU 宿主机上 count=0 的设备请求
+    #     仍会报 "failed to discover GPU vendor from CDI"，故用 runtime 切换实现单文件开关。
+    runtime: ${GPU_RUNTIME:-runc}
+    environment:
+      # 仅 nvidia runtime 下生效；默认全部 GPU，可填具体序号/UUID 限定
+      NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
+    ports:
+      - "8080:8080"   # TorchServe 推理 API（涂鸦分析：检测/分割/骨架）
+      - "8081:8081"   # TorchServe 管理 API
+    healthcheck:
+      # 镜像内不保证有 curl，用 python 标准库探活
+      test:
+        - CMD-SHELL
+        - python -c "import urllib.request as u; u.urlopen('http://localhost:8080/ping', timeout=3)" || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 18        # 模型加载较慢，给足启动窗口
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 16g
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: pg-redis
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: paper-game/server:local
+    container_name: pg-api
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      OUT_ROOT: /data/out
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./out:/data/out
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+    restart: unless-stopped
+
+  worker:
+    image: paper-game/server:local
+    container_name: pg-worker
+    command: ["python", "-m", "app.workers.character_worker"]
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      OUT_ROOT: /data/out
+      RENDER_USE_MESA: "true"
+      TORCHSERVE_UPSTREAM: torchserve:8080
+    volumes:
+      - ./out:/data/out
+    depends_on:
+      torchserve:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_started   # 确保镜像已构建（api 与 worker 同镜像）
+    stop_grace_period: 300s   # >= SUBPROCESS_TIMEOUT(120s) x MAX_ATTEMPTS(2) + 余量，防 docker 默认 10s SIGKILL 打断渲染
+    restart: unless-stopped
+
+  level-worker:
+    image: paper-game/server:local
+    container_name: pg-level-worker
+    command: ["python", "-m", "app.workers.level_worker"]
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      OUT_ROOT: /data/out
+      LEVEL_LLM_BASE_URL: ${LEVEL_LLM_BASE_URL:-}
+      LEVEL_LLM_API_KEY: ${LEVEL_LLM_API_KEY:-}
+      LEVEL_LLM_MODEL: ${LEVEL_LLM_MODEL:-}
+    volumes:
+      - ./out:/data/out
+    depends_on:
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_started
+    stop_grace_period: 200s   # >= SUBPROCESS_TIMEOUT(90s) x MAX_ATTEMPTS(2) + 余量
+    restart: unless-stopped
+
+# GPU 说明：通过上方 GPU_RUNTIME 环境变量切换（单文件实现，无需 override 文件）。
+# worker 渲染保持 Mesa 软渲染（GPU 环境也能正常工作）；
+# 如需 GPU 硬件渲染需 Xvfb+EGL 改造，收益小暂不启用。
+#
+# 真要让 TorchServe 吃上 GPU，必须重建 torchserve 镜像、让 mmcv-full 带 CUDA kernel，二选一：
+#   (a) 换 CUDA devel 基镜像（cu117，与 torch==2.0.0 默认轮子对齐）+ FORCE_CUDA=1
+#       + TORCH_CUDA_ARCH_LIST 从源码编 mmcv-full 1.7.0：版本矩阵不动，但编译慢、吃内存。
+#   (b) 换官方预编译轮子 mmcv-full==1.7.2
+#       -f https://download.openmmlab.com/mmcv/dist/cu117/torch2.0.0/index.html：不用编译，
+#       但必须同时放宽 mmpose 0.29.0 的 mmcv_maximum_version（值为 '1.7.0'，断言用 <=），
+#       否则 pose 那个 .mar 一 import mmpose 就断言失败。
+#   收益评估：GPU 只加速检测+姿态这一段；worker 的 ARAP + Mesa 软渲染占单张 8~18s 的大头，
+#   完全不受 GPU 影响。动手前先实测 TorchServe 那段在总耗时里的占比。

@@ -455,7 +455,7 @@ def test_detects_single_red_flag_candidate(tmp_path): ...
 def test_multiple_flags_remain_separate_candidates(tmp_path): ...
 ```
 
-黄金测试直接对 `../C1Levels/level1-background.png` 调 `detect`（跳过拉正），与 `level1.json` 的 7 条线做最优一一匹配，断言检出 7 条、无额外高置信候选、端点中位误差≤`max(3px, short_side*0.004)`、P95≤`max(8px, short_side*0.01)`。
+黄金测试直接对 `testdata/levels/golden/level1-background.png` 调 `detect`（跳过拉正），与 `level1.json` 的 7 条线做最优一一匹配，断言检出 7 条、无额外高置信候选、端点中位误差≤`max(3px, short_side*0.004)`、P95≤`max(8px, short_side*0.01)`。
 
 - [ ] **步骤 2：运行测试验证失败**
 
