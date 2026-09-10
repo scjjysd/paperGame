@@ -13,7 +13,7 @@ curl -sf "$API/healthz" > /dev/null
 curl -sf http://localhost:8080/ping > /dev/null
 
 echo "== 上传 $SAMPLE =="
-JOB_ID=$(curl -sf -F "file=@$SAMPLE" "$API/v1/characters" | python3 -c 'import sys,json; print(json.load(sys.stdin)["jobId"])')
+JOB_ID=$(curl -sf -F "file=@$SAMPLE" "$API/v1/characters?force=true" | python3 -c 'import sys,json; print(json.load(sys.stdin)["jobId"])')
 echo "jobId=$JOB_ID"
 
 echo "== 轮询（最长 ${TIMEOUT_SEC}s）=="
