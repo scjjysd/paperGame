@@ -5,9 +5,7 @@ from pathlib import Path
 import yaml
 
 from app.services import motion_2d
-
-REPO_ROOT = Path(__file__).resolve().parents[3]          # 仓库根
-VENDOR = REPO_ROOT / 'server' / 'vendor' / 'AnimatedDrawings'
+from app.services.annotations import VENDOR      # vendor 路径单一来源，不在本模块重复推导
 # 纯二维骨架（motion_2d 合成）必须配 flat2d：三组投影面全锁 frontal。
 # vendor 的 fair1_ppf 用 pca，会给 run 的下肢选中 sagittal 投影、把二维动作压掉；
 # 它只留作旧三维动捕资产（app/assets/motions/*.bvh）的回退，不再是默认。
@@ -57,6 +55,11 @@ def build_scene_cfg(char_anno_dir, motion_cfg_fn, out_gif, use_mesa=None, retarg
 
 
 def render_animation(char_anno_dir, motion_cfg_fn, out_gif, use_mesa=None, retarget_cfg=None) -> Path:
+    if not VENDOR.is_dir():
+        # 先校验再干活：本异常会被 render_runner 归为 ASSET_MISSING，响应里只有错误码，
+        # 排查全靠日志里这句带路径与补救动作的提示；放在导入与写文件前还能避开无用产物。
+        raise FileNotFoundError(
+            f'AnimatedDrawings 目录不存在，无法在其中执行渲染：{VENDOR}（宿主先跑 scripts/setup/setup-vendor.sh）')
     out_gif = Path(out_gif)
     out_gif.parent.mkdir(parents=True, exist_ok=True)
     cfg = build_scene_cfg(char_anno_dir, motion_cfg_fn, out_gif, use_mesa=use_mesa, retarget_cfg=retarget_cfg)

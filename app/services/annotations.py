@@ -13,9 +13,13 @@ REASONS = {
     'Found no contours': 'NO_CONTOUR',
 }
 
+# vendor 源码目录：宿主在 <仓库根>/vendor，容器内同结构（Dockerfile COPY vendor/... ./vendor）。
+# 由本模块统一推导、渲染层复用：两处各自推导过一次就飘过——server/ 提升至仓库根时
+# 渲染层多拼了一段 'server'，os.chdir 抛 FileNotFoundError 被误报成 ASSET_MISSING。
+VENDOR = Path(__file__).resolve().parents[2] / 'vendor' / 'AnimatedDrawings'
 # vendor 的 examples 目录不在 pip 包内，模块加载时幂等加入 sys.path（裁定 1）
-_VENDOR_EXAMPLES = Path(__file__).resolve().parent.parent.parent / 'vendor' / 'AnimatedDrawings' / 'examples'
-_vendor_examples_str = str(_VENDOR_EXAMPLES)
+VENDOR_EXAMPLES = VENDOR / 'examples'
+_vendor_examples_str = str(VENDOR_EXAMPLES)
 if _vendor_examples_str not in sys.path:
     sys.path.insert(0, _vendor_examples_str)
 
