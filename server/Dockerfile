@@ -1,8 +1,5 @@
 FROM python:3.9-slim
 
-ENV http_proxy=http://192.168.3.33:7890
-ENV https_proxy=http://192.168.3.33:7890
-
 # ============ 系统依赖 ============
 # opencv-python 需要 libgl1/libglib2.0-0；Mesa 软渲染需要 libosmesa6；socat 供 entrypoint 转发
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -26,10 +23,6 @@ ENV RENDER_USE_MESA=true \
     OUT_ROOT=/data/out \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app/server
-
-# 装完需要的东西后，清掉代理
-ENV http_proxy=
-ENV https_proxy=
 
 VOLUME ["/data/out"]
 EXPOSE 8000
