@@ -24,3 +24,5 @@ testdata/output/
 /.codegraph/
 /.claude/
 /CLAUDE.md
+/.codex/
+/.ai/

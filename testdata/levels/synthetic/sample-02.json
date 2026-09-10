@@ -1,0 +1,92 @@
+{
+  "expectedStatus": "ready",
+  "goalRegion": {
+    "confidence": 0.98,
+    "height": 76,
+    "width": 52,
+    "x": 740,
+    "y": 33
+  },
+  "orientation": "portrait",
+  "paperCorners": [
+    {
+      "x": 340.0,
+      "y": 900.0
+    },
+    {
+      "x": 340.0,
+      "y": 0.0
+    },
+    {
+      "x": 900.0,
+      "y": 0.0
+    },
+    {
+      "x": 900.0,
+      "y": 900.0
+    }
+  ],
+  "platforms": [
+    {
+      "confidence": 0.99,
+      "end": {
+        "x": 370,
+        "y": 470
+      },
+      "id": "platform-00",
+      "start": {
+        "x": 88,
+        "y": 470
+      }
+    },
+    {
+      "confidence": 0.99,
+      "end": {
+        "x": 470,
+        "y": 355
+      },
+      "id": "platform-01",
+      "start": {
+        "x": 135,
+        "y": 355
+      }
+    },
+    {
+      "confidence": 0.99,
+      "end": {
+        "x": 570,
+        "y": 240
+      },
+      "id": "platform-02",
+      "start": {
+        "x": 182,
+        "y": 240
+      }
+    },
+    {
+      "confidence": 0.99,
+      "end": {
+        "x": 350,
+        "y": 125
+      },
+      "id": "platform-03",
+      "start": {
+        "x": 129,
+        "y": 125
+      }
+    }
+  ],
+  "playerStart": {
+    "confidence": 1.0,
+    "source": "synthetic",
+    "x": 122,
+    "y": 426
+  },
+  "rectifiedSize": {
+    "height": 560,
+    "width": 900
+  },
+  "sampleId": "synthetic-02",
+  "seed": 20260908,
+  "variant": "rotated"
+}

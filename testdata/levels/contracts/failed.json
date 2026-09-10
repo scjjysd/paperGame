@@ -1,0 +1,12 @@
+{
+  "jobId": "level_4e91a63bcf21",
+  "status": "failed",
+  "error": {
+    "code": "PROCESSING_DEPENDENCY_UNAVAILABLE",
+    "message": "图像处理依赖暂时不可用。",
+    "retryable": true,
+    "requestId": "req_01J7BE8WZC6Y2K5Q74H86PRB01"
+  },
+  "createdAt": "2026-09-07T08:30:15Z",
+  "updatedAt": "2026-09-07T08:30:22Z"
+}

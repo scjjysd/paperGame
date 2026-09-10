@@ -24,8 +24,11 @@ context_sources:
   - path: server/app/main.py
     reason: 应用工厂与路由挂载模式
 spec: docs/superpowers/specs/2026-09-08-level-parser-design.md
-plan: null
-verification: pending
-code_review: pending
+plan: docs/superpowers/plans/2026-09-08-level-parser.md
+verification: partial
+verification_notes:
+  - 完整离线回归 246 passed、3 skipped；固定黄金验收检出 7 条平台，median 3.062px、P95 3.822px，均已通过。
+  - Docker daemon socket 不存在，未运行真实五容器构建与 smoke_levels_e2e.sh；TorchServe 依赖用例离线跳过，因此不能标记 passed。
+code_review: passed
 architecture_review: not_required
 status: in_progress

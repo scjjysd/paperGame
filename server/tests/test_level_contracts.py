@@ -1,0 +1,95 @@
+from pathlib import Path
+
+import pytest
+from pydantic import ValidationError
+
+from app.level_contracts import (
+    ALGORITHM_MAJOR_VERSION,
+    DEFAULT_PLAYABILITY_PROFILE,
+    Level,
+    LevelFailed,
+    LevelNeedsFix,
+    LevelNeedsReview,
+    LevelReady,
+    PlayabilityProfile,
+    canonical_profile_json,
+    derive_level_job_id,
+)
+
+FIXTURES = Path(__file__).parents[2] / 'testdata' / 'levels' / 'contracts'
+
+@pytest.mark.parametrize('name,model', [
+    ('ready.json', LevelReady), ('needs-fix.json', LevelNeedsFix),
+    ('needs-review.json', LevelNeedsReview), ('failed.json', LevelFailed),
+])
+def test_terminal_fixture_matches_contract(name, model):
+    value = model.model_validate_json((FIXTURES / name).read_text())
+    assert value.status in {'ready', 'needs_fix', 'needs_review', 'failed'}
+
+@pytest.mark.parametrize('name', ['invalid-out-of-bounds.json', 'invalid-background-size.json'])
+def test_invalid_level_fixture_is_rejected(name):
+    with pytest.raises(ValidationError):
+        Level.model_validate_json((FIXTURES / name).read_text())
+
+def test_level_job_id_is_stable_and_profile_sensitive():
+    a = derive_level_job_id(b'image', DEFAULT_PLAYABILITY_PROFILE)
+    same = derive_level_job_id(b'image', PlayabilityProfile(**DEFAULT_PLAYABILITY_PROFILE.model_dump()))
+    changed = derive_level_job_id(b'image', DEFAULT_PLAYABILITY_PROFILE.model_copy(update={'maxJumpDistancePixels': 231}))
+    assert a == same
+    assert a.startswith('level_') and len(a) == 18
+    assert changed != a
+    assert canonical_profile_json(DEFAULT_PLAYABILITY_PROFILE)
+    assert ALGORITHM_MAJOR_VERSION == '1'
+
+def _level_data():
+    return {
+        'schemaVersion': '1.0',
+        'coordinateSystem': {'origin': 'top_left', 'xAxis': 'right', 'yAxis': 'down', 'unit': 'pixel'},
+        'canvas': {'width': 100, 'height': 80},
+        'background': {'imageUrl': '/artifacts/level_fixture/rectified.png', 'contentType': 'image/png', 'width': 100, 'height': 80, 'sha256': 'a' * 64},
+        'playerStart': {'x': 10, 'y': 70, 'source': 'inferred', 'confidence': 0.9},
+        'platforms': [{'id': 'platform_001', 'start': {'x': 5, 'y': 70}, 'end': {'x': 40, 'y': 70}, 'confidence': 0.9}],
+        'goalRegion': {'x': 70, 'y': 10, 'width': 20, 'height': 20, 'confidence': 0.9},
+    }
+
+def test_level_rejects_external_background_url():
+    data = _level_data()
+    data['background']['imageUrl'] = 'https://example.invalid/rectified.png'
+    with pytest.raises(ValidationError):
+        Level.model_validate(data)
+
+
+def test_level_requires_fixed_coordinate_system_and_platform():
+    data = _level_data()
+    assert Level.model_validate(data).canvas.width == 100
+    with pytest.raises(ValidationError):
+        Level.model_validate({**data, 'coordinateSystem': {**data['coordinateSystem'], 'unit': 'world'}})
+    with pytest.raises(ValidationError):
+        Level.model_validate({**data, 'platforms': []})
+
+def test_level_rejects_duplicate_ids_bad_order_zero_length_and_outside_goal():
+    data = _level_data()
+    with pytest.raises(ValidationError):
+        Level.model_validate({**data, 'platforms': [data['platforms'][0], data['platforms'][0]]})
+    with pytest.raises(ValidationError):
+        Level.model_validate({**data, 'platforms': [{**data['platforms'][0], 'start': {'x': 41, 'y': 70}}]})
+    with pytest.raises(ValidationError):
+        Level.model_validate({**data, 'platforms': [{**data['platforms'][0], 'end': {'x': 5, 'y': 70}}]})
+    with pytest.raises(ValidationError):
+        Level.model_validate({**data, 'goalRegion': {**data['goalRegion'], 'x': 90}})
+
+@pytest.mark.parametrize('field,value', [
+    ('maxJumpRisePixels', 0), ('maxJumpDistancePixels', 0), ('characterWidthPixels', 0),
+    ('characterHeightPixels', 0), ('landingTolerancePixels', -1),
+])
+def test_playability_profile_has_positive_and_non_negative_boundaries(field, value):
+    with pytest.raises(ValidationError):
+        PlayabilityProfile(**{**DEFAULT_PLAYABILITY_PROFILE.model_dump(), field: value})
+    profile = PlayabilityProfile(**{**DEFAULT_PLAYABILITY_PROFILE.model_dump(), 'landingTolerancePixels': 0})
+    assert profile.landingTolerancePixels == 0
+
+def test_http_error_envelope_and_optional_details():
+    from app.level_contracts import ErrorEnvelope
+    error = ErrorEnvelope.model_validate({'error': {'code': 'UNAUTHORIZED', 'message': 'no auth', 'retryable': False, 'requestId': 'req_1'}})
+    assert error.error.code == 'UNAUTHORIZED'
+    assert ErrorEnvelope.model_validate({'error': {'code': 'FILE_TOO_LARGE', 'message': 'too large', 'retryable': False, 'requestId': 'req_2', 'details': {'limitBytes': 10485760}}}).error.details['limitBytes'] == 10485760

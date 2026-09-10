@@ -1,0 +1,837 @@
+{
+  "count": 10,
+  "front": {
+    "image": "front.png",
+    "sha256": "f529fda572bbc7f3d3c0ab79414c13bc1d5b7f7fb4396da3aad1831a6cce9837",
+    "sourceSampleId": "synthetic-00"
+  },
+  "generatorVersion": "level-synthetic-1.0.0",
+  "imageSize": {
+    "height": 900,
+    "width": 1280
+  },
+  "samples": [
+    {
+      "goalRegion": {
+        "confidence": 0.98,
+        "height": 76,
+        "width": 52,
+        "x": 756,
+        "y": 33
+      },
+      "id": "synthetic-00",
+      "image": "sample-00.png",
+      "paperCorners": [
+        {
+          "x": 190.0,
+          "y": 150.0
+        },
+        {
+          "x": 1090.0,
+          "y": 150.0
+        },
+        {
+          "x": 1090.0,
+          "y": 710.0
+        },
+        {
+          "x": 190.0,
+          "y": 710.0
+        }
+      ],
+      "platforms": [
+        {
+          "confidence": 0.99,
+          "end": {
+            "x": 292,
+            "y": 470
+          },
+          "id": "platform-00",
+          "start": {
+            "x": 72,
+            "y": 470
+          }
+        },
+        {
+          "confidence": 0.99,
+          "end": {
+            "x": 392,
+            "y": 355
+          },
+          "id": "platform-01",
+          "start": {
+            "x": 119,
+            "y": 355
+          }
+        },
+        {
+          "confidence": 0.99,
+          "end": {
+            "x": 492,
+            "y": 240
+          },
+          "id": "platform-02",
+          "start": {
+            "x": 166,
+            "y": 240
+          }
+        },
+        {
+          "confidence": 0.99,
+          "end": {
+            "x": 492,
+            "y": 125
+          },
+          "id": "platform-03",
+          "start": {
+            "x": 113,
+            "y": 125
+          }
+        }
+      ],
+      "sha256": "f529fda572bbc7f3d3c0ab79414c13bc1d5b7f7fb4396da3aad1831a6cce9837",
+      "truth": "sample-00.json",
+      "variant": "front"
+    },
+    {
+      "goalRegion": {
+        "confidence": 0.98,
+        "height": 76,
+        "width": 52,
+        "x": 748,
+        "y": 33
+      },
+      "id": "synthetic-01",
+      "image": "sample-01.png",
+      "paperCorners": [
+        {
+          "x": 180.0,
+          "y": 190.0
+        },
+        {
+          "x": 1100.0,
+          "y": 112.0
+        },
+        {
+          "x": 1140.0,
+          "y": 728.0
+        },
+        {
+          "x": 135.0,
+          "y": 670.0
+        }
+      ],
+      "platforms": [
+        {
+          "confidence": 0.99,
+          "end": {
+            "x": 331,
+            "y": 470
+          },
+          "id": "platform-00",
+          "start": {
+            "x": 80,
+            "y": 470
+          }
+        },
+        {
+          "confidence": 0.99,
+          "end": {
+            "x": 431,
+            "y": 355
+          },
+          "id": "platform-01",
+          "start": {
+            "x": 127,
+            "y": 355
+          }
+        },
+        {
+          "confidence": 0.99,
+          "end": {
+            "x": 531,
+            "y": 240
+          },
+          "id": "platform-02",
+          "start": {
+            "x": 174,
+            "y": 240
+          }
+        },
+        {
+          "confidence": 0.99,
+          "end": {
+            "x": 531,
+            "y": 125
+          },
+          "id": "platform-03",
+          "start": {
+            "x": 121,
+            "y": 125
+          }
+        }
+      ],
+      "sha256": "c0e49cddd2f6f30f7a6b610045b89e86727b0e71ff574bfacd2e4f2703379558",
+      "truth": "sample-01.json",
+      "variant": "perspective"
+    },
+    {
+      "goalRegion": {
+        "confidence": 0.98,
+        "height": 76,
+        "width": 52,
+        "x": 740,
+        "y": 33
+      },
+      "id": "synthetic-02",
+      "image": "sample-02.png",
+      "paperCorners": [
+        {
+          "x": 340.0,
+          "y": 900.0
+        },
+        {
+          "x": 340.0,
+          "y": 0.0
+        },
+        {
+          "x": 900.0,
+          "y": 0.0
+        },
+        {
+          "x": 900.0,
+          "y": 900.0
+        }
+      ],
+      "platforms": [
+        {
+          "confidence": 0.99,
+          "end": {
+            "x": 370,
+            "y": 470
+          },
+          "id": "platform-00",
+          "start": {
+            "x": 88,
+            "y": 470
+          }
+        },
+        {
+          "confidence": 0.99,
+          "end": {
+            "x": 470,
+            "y": 355
+          },
+          "id": "platform-01",
+          "start": {
+            "x": 135,
+            "y": 355
+          }
+        },
+        {
+          "confidence": 0.99,
+          "end": {
+            "x": 570,
+            "y": 240
+          },
+          "id": "platform-02",
+          "start": {
+            "x": 182,
+            "y": 240
+          }
+        },
+        {
+          "confidence": 0.99,
+          "end": {
+            "x": 350,
+            "y": 125
+          },
+          "id": "platform-03",
+          "start": {
+            "x": 129,
+            "y": 125
+          }
+        }
+      ],
+      "sha256": "daea9c4bf70f5044e84d855e72f3457d622e9e40d17fdbc2d84e188cd7a545c6",
+      "truth": "sample-02.json",
+      "variant": "rotated"
+    },
+    {
+      "goalRegion": {
+        "confidence": 0.98,
+        "height": 76,
+        "width": 52,
+        "x": 756,
+        "y": 33
+      },
+      "id": "synthetic-03",
+      "image": "sample-03.png",
+      "paperCorners": [
+        {
+          "x": 190.0,
+          "y": 150.0
+        },
+        {
+          "x": 1090.0,
+          "y": 150.0
+        },
+        {
+          "x": 1090.0,
+          "y": 710.0
+        },
+        {
+          "x": 190.0,
+          "y": 710.0
+        }
+      ],
+      "platforms": [
+        {
+          "confidence": 0.99,
+          "end": {
+            "x": 385,
+            "y": 470
+          },
+          "id": "platform-00",
+          "start": {
+            "x": 72,
+            "y": 470
+          }
+        },
+        {
+          "confidence": 0.99,
+          "end": {
+            "x": 485,
+            "y": 355
+          },
+          "id": "platform-01",
+          "start": {
+            "x": 119,
+            "y": 355
+          }
+        },
+        {
+          "confidence": 0.99,
+          "end": {
+            "x": 585,
+            "y": 240
+          },
+          "id": "platform-02",
+          "start": {
+            "x": 166,
+            "y": 240
+          }
+        },
+        {
+          "confidence": 0.99,
+          "end": {
+            "x": 365,
+            "y": 125
+          },
+          "id": "platform-03",
+          "start": {
+            "x": 113,
+            "y": 125
+          }
+        }
+      ],
+      "sha256": "b1981f900b35459159805cd3f28fcb98a2b3ec754c7310ee970fcc3babdfc605",
+      "truth": "sample-03.json",
+      "variant": "uneven_light"
+    },
+    {
+      "goalRegion": {
+        "confidence": 0.98,
+        "height": 76,
+        "width": 52,
+        "x": 748,
+        "y": 33
+      },
+      "id": "synthetic-04",
+      "image": "sample-04.png",
+      "paperCorners": [
+        {
+          "x": 190.0,
+          "y": 150.0
+        },
+        {
+          "x": 1090.0,
+          "y": 150.0
+        },
+        {
+          "x": 1090.0,
+          "y": 710.0
+        },
+        {
+          "x": 190.0,
+          "y": 710.0
+        }
+      ],
+      "platforms": [
+        {
+          "confidence": 0.99,
+          "end": {
+            "x": 424,
+            "y": 470
+          },
+          "id": "platform-00",
+          "start": {
+            "x": 80,
+            "y": 470
+          }
+        },
+        {
+          "confidence": 0.99,
+          "end": {
+            "x": 524,
+            "y": 355
+          },
+          "id": "platform-01",
+          "start": {
+            "x": 127,
+            "y": 355
+          }
+        },
+        {
+          "confidence": 0.99,
+          "end": {
+            "x": 404,
+            "y": 240
+          },
+          "id": "platform-02",
+          "start": {
+            "x": 174,
+            "y": 240
+          }
+        },
+        {
+          "confidence": 0.99,
+          "end": {
+            "x": 404,
+            "y": 125
+          },
+          "id": "platform-03",
+          "start": {
+            "x": 121,
+            "y": 125
+          }
+        }
+      ],
+      "sha256": "1137747e2f149264a7bbb600060a8d61cbb879dc1ddd99ee5b3b337fa4325561",
+      "truth": "sample-04.json",
+      "variant": "front"
+    },
+    {
+      "goalRegion": {
+        "confidence": 0.98,
+        "height": 76,
+        "width": 52,
+        "x": 740,
+        "y": 33
+      },
+      "id": "synthetic-05",
+      "image": "sample-05.png",
+      "paperCorners": [
+        {
+          "x": 180.0,
+          "y": 190.0
+        },
+        {
+          "x": 1100.0,
+          "y": 112.0
+        },
+        {
+          "x": 1140.0,
+          "y": 728.0
+        },
+        {
+          "x": 135.0,
+          "y": 670.0
+        }
+      ],
+      "platforms": [
+        {
+          "confidence": 0.99,
+          "end": {
+            "x": 463,
+            "y": 470
+          },
+          "id": "platform-00",
+          "start": {
+            "x": 88,
+            "y": 470
+          }
+        },
+        {
+          "confidence": 0.99,
+          "end": {
+            "x": 563,
+            "y": 355
+          },
+          "id": "platform-01",
+          "start": {
+            "x": 135,
+            "y": 355
+          }
+        },
+        {
+          "confidence": 0.99,
+          "end": {
+            "x": 443,
+            "y": 240
+          },
+          "id": "platform-02",
+          "start": {
+            "x": 182,
+            "y": 240
+          }
+        },
+        {
+          "confidence": 0.99,
+          "end": {
+            "x": 443,
+            "y": 125
+          },
+          "id": "platform-03",
+          "start": {
+            "x": 129,
+            "y": 125
+          }
+        }
+      ],
+      "sha256": "1200751643ea520d32ee9b95f6df5bd6c48065939b5475c4721c343b36fe8a1d",
+      "truth": "sample-05.json",
+      "variant": "perspective"
+    },
+    {
+      "goalRegion": {
+        "confidence": 0.98,
+        "height": 76,
+        "width": 52,
+        "x": 756,
+        "y": 33
+      },
+      "id": "synthetic-06",
+      "image": "sample-06.png",
+      "paperCorners": [
+        {
+          "x": 340.0,
+          "y": 900.0
+        },
+        {
+          "x": 340.0,
+          "y": 0.0
+        },
+        {
+          "x": 900.0,
+          "y": 0.0
+        },
+        {
+          "x": 900.0,
+          "y": 900.0
+        }
+      ],
+      "platforms": [
+        {
+          "confidence": 0.99,
+          "end": {
+            "x": 478,
+            "y": 470
+          },
+          "id": "platform-00",
+          "start": {
+            "x": 72,
+            "y": 470
+          }
+        },
+        {
+          "confidence": 0.99,
+          "end": {
+            "x": 358,
+            "y": 355
+          },
+          "id": "platform-01",
+          "start": {
+            "x": 119,
+            "y": 355
+          }
+        },
+        {
+          "confidence": 0.99,
+          "end": {
+            "x": 458,
+            "y": 240
+          },
+          "id": "platform-02",
+          "start": {
+            "x": 166,
+            "y": 240
+          }
+        },
+        {
+          "confidence": 0.99,
+          "end": {
+            "x": 458,
+            "y": 125
+          },
+          "id": "platform-03",
+          "start": {
+            "x": 113,
+            "y": 125
+          }
+        }
+      ],
+      "sha256": "238ef5c36fc31e3802e1a98105f76f19877786b6d3273d9e9ade593bb36a9eef",
+      "truth": "sample-06.json",
+      "variant": "rotated"
+    },
+    {
+      "goalRegion": {
+        "confidence": 0.98,
+        "height": 76,
+        "width": 52,
+        "x": 748,
+        "y": 33
+      },
+      "id": "synthetic-07",
+      "image": "sample-07.png",
+      "paperCorners": [
+        {
+          "x": 190.0,
+          "y": 150.0
+        },
+        {
+          "x": 1090.0,
+          "y": 150.0
+        },
+        {
+          "x": 1090.0,
+          "y": 710.0
+        },
+        {
+          "x": 190.0,
+          "y": 710.0
+        }
+      ],
+      "platforms": [
+        {
+          "confidence": 0.99,
+          "end": {
+            "x": 517,
+            "y": 470
+          },
+          "id": "platform-00",
+          "start": {
+            "x": 80,
+            "y": 470
+          }
+        },
+        {
+          "confidence": 0.99,
+          "end": {
+            "x": 397,
+            "y": 355
+          },
+          "id": "platform-01",
+          "start": {
+            "x": 127,
+            "y": 355
+          }
+        },
+        {
+          "confidence": 0.99,
+          "end": {
+            "x": 497,
+            "y": 240
+          },
+          "id": "platform-02",
+          "start": {
+            "x": 174,
+            "y": 240
+          }
+        },
+        {
+          "confidence": 0.99,
+          "end": {
+            "x": 497,
+            "y": 125
+          },
+          "id": "platform-03",
+          "start": {
+            "x": 121,
+            "y": 125
+          }
+        }
+      ],
+      "sha256": "721918ce401bcccd10d0595c3f1af631860f10c0100e7df5ca587a14d52d8d41",
+      "truth": "sample-07.json",
+      "variant": "uneven_light"
+    },
+    {
+      "goalRegion": {
+        "confidence": 0.98,
+        "height": 76,
+        "width": 52,
+        "x": 740,
+        "y": 33
+      },
+      "id": "synthetic-08",
+      "image": "sample-08.png",
+      "paperCorners": [
+        {
+          "x": 190.0,
+          "y": 150.0
+        },
+        {
+          "x": 1090.0,
+          "y": 150.0
+        },
+        {
+          "x": 1090.0,
+          "y": 710.0
+        },
+        {
+          "x": 190.0,
+          "y": 710.0
+        }
+      ],
+      "platforms": [
+        {
+          "confidence": 0.99,
+          "end": {
+            "x": 336,
+            "y": 470
+          },
+          "id": "platform-00",
+          "start": {
+            "x": 88,
+            "y": 470
+          }
+        },
+        {
+          "confidence": 0.99,
+          "end": {
+            "x": 436,
+            "y": 355
+          },
+          "id": "platform-01",
+          "start": {
+            "x": 135,
+            "y": 355
+          }
+        },
+        {
+          "confidence": 0.99,
+          "end": {
+            "x": 536,
+            "y": 240
+          },
+          "id": "platform-02",
+          "start": {
+            "x": 182,
+            "y": 240
+          }
+        },
+        {
+          "confidence": 0.99,
+          "end": {
+            "x": 536,
+            "y": 125
+          },
+          "id": "platform-03",
+          "start": {
+            "x": 129,
+            "y": 125
+          }
+        }
+      ],
+      "sha256": "5f519014328dd24d3b9d1086a8caabd723144ed5ec6aaa7ca032473b8f581fa4",
+      "truth": "sample-08.json",
+      "variant": "front"
+    },
+    {
+      "goalRegion": {
+        "confidence": 0.98,
+        "height": 76,
+        "width": 52,
+        "x": 756,
+        "y": 33
+      },
+      "id": "synthetic-09",
+      "image": "sample-09.png",
+      "paperCorners": [
+        {
+          "x": 180.0,
+          "y": 190.0
+        },
+        {
+          "x": 1100.0,
+          "y": 112.0
+        },
+        {
+          "x": 1140.0,
+          "y": 728.0
+        },
+        {
+          "x": 135.0,
+          "y": 670.0
+        }
+      ],
+      "platforms": [
+        {
+          "confidence": 0.99,
+          "end": {
+            "x": 351,
+            "y": 470
+          },
+          "id": "platform-00",
+          "start": {
+            "x": 72,
+            "y": 470
+          }
+        },
+        {
+          "confidence": 0.99,
+          "end": {
+            "x": 451,
+            "y": 355
+          },
+          "id": "platform-01",
+          "start": {
+            "x": 119,
+            "y": 355
+          }
+        },
+        {
+          "confidence": 0.99,
+          "end": {
+            "x": 551,
+            "y": 240
+          },
+          "id": "platform-02",
+          "start": {
+            "x": 166,
+            "y": 240
+          }
+        },
+        {
+          "confidence": 0.99,
+          "end": {
+            "x": 551,
+            "y": 125
+          },
+          "id": "platform-03",
+          "start": {
+            "x": 113,
+            "y": 125
+          }
+        }
+      ],
+      "sha256": "9f55cdb2c7deca1a2b5c85e6de2a3c681845e2806e8fbdd06914915595cb25ae",
+      "truth": "sample-09.json",
+      "variant": "perspective"
+    }
+  ],
+  "schemaVersion": "1.0",
+  "seed": 20260908
+}

@@ -1,0 +1,96 @@
+{
+  "jobId": "level_4e91a63bcf21",
+  "status": "ready",
+  "schemaVersion": "1.0",
+  "algorithmVersion": "level-parser-1.0.0",
+  "createdAt": "2026-09-07T08:30:15Z",
+  "updatedAt": "2026-09-07T08:30:22Z",
+  "result": {
+    "level": {
+      "schemaVersion": "1.0",
+      "coordinateSystem": {
+        "origin": "top_left",
+        "xAxis": "right",
+        "yAxis": "down",
+        "unit": "pixel"
+      },
+      "canvas": {
+        "width": 1245,
+        "height": 810
+      },
+      "background": {
+        "imageUrl": "/artifacts/level_fixture/rectified.png",
+        "contentType": "image/png",
+        "width": 1246,
+        "height": 810,
+        "sha256": "8f1c2f6d0e18d5a95e2b9846a7d375af4d62f34cbb06bf30df117d1d47694f75"
+      },
+      "playerStart": {
+        "x": 110,
+        "y": 681,
+        "source": "inferred",
+        "confidence": 0.94
+      },
+      "platforms": [
+        {
+          "id": "platform_001",
+          "start": {
+            "x": 83,
+            "y": 681
+          },
+          "end": {
+            "x": 298,
+            "y": 681
+          },
+          "confidence": 0.98
+        },
+        {
+          "id": "platform_002",
+          "start": {
+            "x": 315,
+            "y": 682
+          },
+          "end": {
+            "x": 472,
+            "y": 682
+          },
+          "confidence": 0.97
+        }
+      ],
+      "goalRegion": {
+        "x": 1100,
+        "y": 142,
+        "width": 96,
+        "height": 112,
+        "confidence": 0.93
+      }
+    },
+    "analysis": {
+      "playability": "playable",
+      "profile": {
+        "profileVersion": "unity-c1-test-1",
+        "maxJumpRisePixels": 150,
+        "maxJumpDistancePixels": 230,
+        "characterWidthPixels": 32,
+        "characterHeightPixels": 58,
+        "landingTolerancePixels": 6
+      },
+      "startPlatformId": "platform_001",
+      "goalPlatformId": "platform_007",
+      "path": [
+        "platform_001",
+        "platform_002",
+        "platform_004",
+        "platform_007"
+      ],
+      "warnings": []
+    },
+    "artifacts": {
+      "inputUrl": "/artifacts/level_fixture/input.jpg",
+      "rectifiedImageUrl": "/artifacts/level_fixture/rectified.png",
+      "overlayImageUrl": "/artifacts/level_fixture/overlay.png",
+      "levelJsonUrl": "/artifacts/level_fixture/level.json",
+      "analysisJsonUrl": "/artifacts/level_fixture/analysis.json"
+    }
+  }
+}

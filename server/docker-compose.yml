@@ -109,6 +109,46 @@ services:
     stop_grace_period: 300s   # >= SUBPROCESS_TIMEOUT(120s) x MAX_ATTEMPTS(2) + 余量，防 docker 默认 10s SIGKILL 打断渲染
     restart: unless-stopped
 
+  level-worker:
+    image: paper-game/server:local
+    container_name: pg-level-worker
+    command: ["python", "-m", "app.workers.level_worker"]
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      OUT_ROOT: /data/out
+      LEVEL_LLM_BASE_URL: ${LEVEL_LLM_BASE_URL:-}
+      LEVEL_LLM_API_KEY: ${LEVEL_LLM_API_KEY:-}
+      LEVEL_LLM_MODEL: ${LEVEL_LLM_MODEL:-}
+    volumes:
+      - ./out:/data/out
+    depends_on:
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_started
+    stop_grace_period: 200s   # >= SUBPROCESS_TIMEOUT(90s) x MAX_ATTEMPTS(2) + 余量
+    restart: unless-stopped
+
+  level-worker:
+    image: paper-game/server:local
+    container_name: pg-level-worker
+    command: ["python", "-m", "app.workers.level_worker"]
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      OUT_ROOT: /data/out
+      LEVEL_LLM_BASE_URL: ${LEVEL_LLM_BASE_URL:-}
+      LEVEL_LLM_API_KEY: ${LEVEL_LLM_API_KEY:-}
+      LEVEL_LLM_MODEL: ${LEVEL_LLM_MODEL:-}
+    volumes:
+      - ./out:/data/out
+    depends_on:
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_started
+    stop_grace_period: 200s   # >= SUBPROCESS_TIMEOUT(90s) x MAX_ATTEMPTS(2) + 余量
+    restart: unless-stopped
+
 # GPU 说明：通过上方 GPU_RUNTIME 环境变量切换（单文件实现，无需 override 文件）。
 # worker 渲染保持 Mesa 软渲染（GPU 环境也能正常工作）；
 # 如需 GPU 硬件渲染需 Xvfb+EGL 改造，收益小暂不启用。

@@ -28,20 +28,20 @@
 
 ## 2. 当前进度快照
 
-截至 `main` 分支最新提交（`21d284a`）：
+截至 `feat/level-parser` 工作树（2026-09-10，关卡链路尚未完成 Docker 实机冒烟）：
 
 | P0 任务 | 内容 | 状态 |
 |---|---|---|
 | 任务 1 | 契约、样本、验收基线 | ✅ 服务端侧完成（`app/contracts.py` + `testdata/characters/s01-s20.png`）；Unity 侧 `GameContracts.cs` 未建 |
 | 任务 2 | AnimatedDrawings 可行性尖刺 | ✅ **验收通过**：20/20 成功，单张最大 18.1s（门槛 ≥16 成功、≤60s）。画质经两轮返工：先补标注修复（第 ⑥ 节），再把动画驱动从三维动捕投影换成按画合成二维（第 ⑦ 节）——现首帧掰动 0.00°、全图丢失中位 0.9%、形状保真 19/20 |
 | 任务 3 | 服务端角色异步接口 | ✅ **完成并冒烟通过**：4 容器全栈、46 用例全绿、端到端 `SMOKE_E2E_PASS` |
-| 任务 4 | 服务端关卡视觉解析 | ⬜ 未开始（无 `level_parser.py` / `api/levels.py`） |
-| 任务 5 | 服务端可玩性校验 | ⬜ 未开始（无 `playability.py`） |
+| 任务 4 | 服务端关卡视觉解析 | ✅ 已落地：A4 拉正、OpenCV 平台/红旗候选、可选 LLM 候选复核、异步 Level API v1 |
+| 任务 5 | 服务端可玩性校验 | ✅ 已落地：出生点/终点承载、跳跃图可达性、`ready`/`needs_fix`/`needs_review` 诊断；真实 Docker 冒烟待补 |
 | 任务 6 | Unity 主角生成与缓存 | ⬜ 未开始（**仓库尚无 `client-unity/` 目录**） |
 | 任务 7 | Unity 关卡拍摄与游玩闭环 | ⬜ 未开始 |
 | 任务 8 | 集成验收与兜底 | 🟡 部分：角色链路端到端冒烟已做；全链路（含关卡）未做 |
 
-一句话概括：**服务端角色动画这一条链路已经打通并可部署，关卡解析与 Unity 客户端尚未动工。**
+一句话概括：**服务端角色动画与关卡解析/可玩性代码均已落地；关卡链路离线回归已执行，Docker 实机冒烟仍受环境阻塞，Unity 客户端尚未动工。**
 
 ---
 
@@ -200,6 +200,22 @@ server/out/jobs/{jobId}/
 
 当前由 api 容器本地静态目录 `/artifacts` 伺服；**演示阶段计划升级为对象存储 + 签名 URL**（WebGL CORS 兼容、多实例），接口层已用 URL 抽象隔离，届时不改 API 形状。
 
+关卡任务复用同一目录，按终态发布以下文件：
+
+```text
+server/out/jobs/{levelJobId}/
+├── input.png          EXIF 归一化后的上传图
+├── request.json       实际 playabilityProfile 与任务时间戳
+├── rectified.png      拉正后的权威背景
+├── overlay.png        候选、路径与复核诊断叠加图
+├── level.json         ready/needs_fix 时的权威几何；needs_review 不发布
+├── analysis.json      可玩性或复核原因
+├── llm-audit.json     仅调用 LLM 时生成的旁路审计
+└── result.json        原子发布的终态信封
+```
+
+关卡契约版本为 `schemaVersion=1.0`，当前算法版本为 `level-parser-1.0.0`。
+
 ---
 
 ## 6. API 契约速查
@@ -222,6 +238,23 @@ GET /v1/characters/{jobId}/view     同一份信息的单页 HTML，浏览器直
 GET /artifacts/{jobId}/{path}   StaticFiles 挂载 ./out/jobs
 GET /healthz                    {"status": "ok"}
 ```
+
+关卡上传与轮询示例（`playabilityProfile` 省略时使用服务端默认值）：
+
+```bash
+curl -sS -X POST http://localhost:8000/v1/levels \
+  -F schemaVersion=1.0 \
+  -F 'playabilityProfile={"profileVersion":"unity-c1-test-1","maxJumpRisePixels":150,"maxJumpDistancePixels":230,"characterWidthPixels":32,"characterHeightPixels":58,"landingTolerancePixels":6}' \
+  -F file=@../testdata/levels/synthetic/front.png
+# 202 {"jobId":"level_...","status":"queued","statusUrl":"/v1/levels/level_...","createdAt":"..."}
+
+curl -sS http://localhost:8000/v1/levels/level_...
+# queued/processing，或 ready/needs_fix/needs_review/failed 终态信封
+```
+
+关卡任务由独立 `level-worker` 消费 `pq:levels`。全栈现为 5 容器：`torchserve`、`redis`、`api`、`worker`、`level-worker`；关卡实机验收运行 `bash scripts/smoke_levels_e2e.sh`，成功标记为 `SMOKE_LEVELS_E2E_PASS`。可选 LLM 复核仅在同时配置 `LEVEL_LLM_BASE_URL`（必须 HTTPS）、`LEVEL_LLM_API_KEY`、`LEVEL_LLM_MODEL` 时启用；缺失、配置错误、请求失败或响应无效时无损降级为纯 OpenCV，LLM 和可玩性分析都不能创建、移动或延长平台坐标。
+
+Level v1 已知边界：只支持单张横版纸、近水平直平台和单一红旗；输入限 JPEG/PNG、10 MiB、边长 800–12000、最多 4000 万像素；无鉴权/限流/对象存储；`force=true` 复用同一 jobId；真实拍摄和 Unity 任务 6–7 尚未验收。
 
 给 Unity 的完整接口文档（字段类型、精灵表切帧、错误码、C# DTO、已知边界）见根目录 [`API.md`](API.md)。
 
@@ -258,7 +291,7 @@ GET /healthz                    {"status": "ok"}
 - `JobState`：`queued` `processing` `needs_correction` `ready` `failed`
 - `ErrorCode`：`FILE_TOO_LARGE` `NOT_AN_IMAGE` `UNSUPPORTED_FORMAT` `JOB_NOT_FOUND` `QUEUE_UNAVAILABLE` `RENDER_TIMEOUT` `RENDER_CRASHED` `ASSET_MISSING` `INTERNAL`
 - `CorrectionReason`：`NO_HUMANOID` `NO_SKELETON` `MULTIPLE_SKELETONS` `NO_CONTOUR` `SKELETON_MISFIT` `ANALYZE_FAILED`
-- 关卡侧（**尚未实现**，契约已在 P0 计划中锁定）：`playable` / `needs_fix`，错误码 `NO_GROUND` `NO_FLAG` `MULTIPLE_FLAGS` `GOAL_UNREACHABLE` `PHOTO_INVALID`
+- 关卡任务态：`queued` `processing` `ready` `needs_fix` `needs_review` `failed`；可玩性结论为 `playable` `unreachable` `uncertain`，唯一真源是 `server/app/level_contracts.py`。
 
 Unity 侧 `GameContracts.cs` 将来照 `contracts.py` 逐字镜像，客户端禁止使用匿名 JSON。
 
@@ -459,8 +492,7 @@ python -m pytest tests/ -v --ignore=tests/test_spike_batch.py
 
 ### 尚未动工的 P0 任务
 
-- 任务 4：关卡视觉解析（四角定位标记检测 → A4 透视校正 → 1920×1080 画布；HoughLinesP 检黑色近水平线合并为平台；HSV 红色阈值 + 三角形轮廓 + 竖杆空间关系识别旗帜）。
-- 任务 5：可玩性校验（平台为节点、按 Unity 锁定的 `maxJumpX/maxJumpY` 建有向边，从起始平台 BFS 到旗帜所在平台）。
+- 任务 4-5：服务端关卡视觉解析与可玩性校验代码已落地；仍需补真实 Docker 全栈冒烟、真实拍摄集标定，以及 C1Levels 黄金端点精度收敛。
 - 任务 6-7：Unity 侧全部（`client-unity/` 目录尚不存在）。
 - 任务 8：全链路集成验收（15 张真实关卡纸 ≥13 张正确识别；3 名儿童完整流程；全程 ≤3 分钟）。
 

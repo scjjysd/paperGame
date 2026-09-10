@@ -1,0 +1,99 @@
+{
+  "jobId": "level_4e91a63bcf21",
+  "status": "needs_fix",
+  "schemaVersion": "1.0",
+  "algorithmVersion": "level-parser-1.0.0",
+  "createdAt": "2026-09-07T08:30:15Z",
+  "updatedAt": "2026-09-07T08:30:22Z",
+  "result": {
+    "level": {
+      "schemaVersion": "1.0",
+      "coordinateSystem": {
+        "origin": "top_left",
+        "xAxis": "right",
+        "yAxis": "down",
+        "unit": "pixel"
+      },
+      "canvas": {
+        "width": 1245,
+        "height": 810
+      },
+      "background": {
+        "imageUrl": "/artifacts/level_fixture/rectified.png",
+        "contentType": "image/png",
+        "width": 1245,
+        "height": 810,
+        "sha256": "8f1c2f6d0e18d5a95e2b9846a7d375af4d62f34cbb06bf30df117d1d47694f75"
+      },
+      "playerStart": {
+        "x": 110,
+        "y": 681,
+        "source": "inferred",
+        "confidence": 0.94
+      },
+      "platforms": [
+        {
+          "id": "platform_001",
+          "start": {
+            "x": 83,
+            "y": 681
+          },
+          "end": {
+            "x": 298,
+            "y": 681
+          },
+          "confidence": 0.98
+        },
+        {
+          "id": "platform_002",
+          "start": {
+            "x": 520,
+            "y": 480
+          },
+          "end": {
+            "x": 690,
+            "y": 480
+          },
+          "confidence": 0.96
+        }
+      ],
+      "goalRegion": {
+        "x": 1100,
+        "y": 142,
+        "width": 96,
+        "height": 112,
+        "confidence": 0.93
+      }
+    },
+    "analysis": {
+      "playability": "unreachable",
+      "profile": {
+        "profileVersion": "unity-c1-test-1",
+        "maxJumpRisePixels": 150,
+        "maxJumpDistancePixels": 230,
+        "characterWidthPixels": 32,
+        "characterHeightPixels": 58,
+        "landingTolerancePixels": 6
+      },
+      "path": [],
+      "warnings": [
+        {
+          "code": "JUMP_GAP_TOO_HIGH",
+          "message": "platform_003 到 platform_004 的高度差超过当前跳跃能力。",
+          "relatedPlatformIds": [
+            "platform_003",
+            "platform_004"
+          ],
+          "requiredValuePixels": 184,
+          "availableValuePixels": 150
+        }
+      ]
+    },
+    "artifacts": {
+      "rectifiedImageUrl": "/artifacts/level_fixture/rectified.png",
+      "overlayImageUrl": "/artifacts/level_fixture/overlay.png",
+      "levelJsonUrl": "/artifacts/level_fixture/level.json",
+      "analysisJsonUrl": "/artifacts/level_fixture/analysis.json"
+    }
+  }
+}
