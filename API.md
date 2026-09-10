@@ -4,19 +4,19 @@
 
 **契约唯一真源是 `app/contracts.py`**。本文档按该文件与实际代码路径编写，字段有出入时以代码为准。Unity 侧 `GameContracts.cs` 应照它逐字镜像（第 7 节给出 DTO）。
 
-最后核对：2026-09-05，分支 `feat/2d-motion-synthesis`。
+最后核对：2026-09-10。本次变更：① 服务端已配置 CORS；② 所有 `*Url` 改为**完整地址**（含 scheme+host）；③ 错误体与非终态响应新增中文 `message`；④ 新增关卡审查端点（见 2.7）。
 
 ---
 
 ## 0. 快速上手
 
 ```
-① POST /v1/characters        (multipart, 字段名 file)  →  202 {"jobId": "char_9c3ff81ce4ea"}
-② GET  /v1/characters/{jobId}  每 1s 轮询             →  status 变为 ready（实测约 20s）
-③ 按 animations.run / animations.jump 的 spriteSheetUrl 下载 PNG，按 frameWidth 切帧
+① POST /v1/characters        (multipart, 字段名 file)  →  202 {"jobId": "char_9c3ff81ce4ea", "statusUrl": "http://…", "viewUrl": "http://…"}
+② GET  /v1/characters/{jobId}  每 1s 轮询（也可直接用①返回的 statusUrl）→  status 变为 ready（实测约 20s）
+③ 按 animations.run / animations.jump 的 spriteSheetUrl 下载 PNG（已是完整地址，直接 GET），按 frameWidth 切帧
 ```
 
-调试时可直接在浏览器打开 `GET /v1/characters/{jobId}/view`，一页看到原图、动画、标注、精灵表。
+调试时直接打开①返回的 `viewUrl`（即 `GET /v1/characters/{jobId}/view`），一页看到原图、动画、标注、精灵表。
 
 ---
 
@@ -26,12 +26,16 @@
 |---|---|
 | Base URL | `http://<host>:8000`（docker compose 的 `api` 容器） |
 | 响应体 | 一律 JSON（`/view` 例外，返回 `text/html`） |
+| URL 字段 | 所有 `*Url`（`spriteSheetUrl`/`maskUrl`/`statusUrl`/`viewUrl`…）都是**完整地址**，可直接请求，不要再拼 Base URL |
+| 基址来源 | 优先环境变量 `PUBLIC_BASE_URL`；未配置时按请求的 Host 推导（反向代理下请显式配置） |
+| 跨域 | 已启用 CORS，默认允许所有来源；`CORS_ALLOW_ORIGINS` 可收窄，详见第 9 节 |
 | 上传大小上限 | 10 MiB（`10 * 1024 * 1024`），超出即 400 |
 | 接受的图片格式 | PNG、JPEG（按文件头前 4 字节嗅探，不看扩展名和 Content-Type） |
 | 时间字段 | `updatedAt` 是 **UTC 且不带 `Z` 后缀**（如 `2026-09-05T15:19:12`），解析时务必按 UTC 处理；`renderedAt`（仅 `/detail`）带时区偏移 |
-| 错误体 | `{"code": "<错误码>"}`，见第 6 节 |
+| 中文说明 | 所有响应都带 `message`：非终态是状态说明，`needs_correction` 是修正指引，`failed` 与错误响应是失败原因 |
+| 错误体 | `{"code": "<错误码>", "message": "<中文原因>"}`，见第 6 节 |
 
-**注意区分两种 404**：job 不存在返回 `{"code":"JOB_NOT_FOUND"}`；路径写错则是 FastAPI 默认的 `{"detail":"Not Found"}`。客户端请按 `code` 字段判断，不要只看状态码。
+**404 有两种**：job 不存在返回 `{"code":"JOB_NOT_FOUND"}`；路径写错返回 `{"code":"NOT_FOUND"}`。两者都带中文 `message`，客户端按 `code` 字段判断即可，不要只看状态码。
 
 ---
 
@@ -59,21 +63,28 @@ Content-Type: image/png
 响应 `202 Accepted`：
 
 ```json
-{"jobId": "char_9c3ff81ce4ea"}
+{
+  "jobId": "char_9c3ff81ce4ea",
+  "statusUrl": "http://localhost:8000/v1/characters/char_9c3ff81ce4ea",
+  "viewUrl": "http://localhost:8000/v1/characters/char_9c3ff81ce4ea/view"
+}
 ```
+
+`statusUrl` 是轮询地址，`viewUrl` 是浏览器可直接打开的审查页 —— 两者都是完整地址。
 
 **jobId 由文件内容决定**：`"char_" + sha256(文件字节).hexdigest()[:12]`。因此同一张图无论上传多少次都得到同一个 jobId，且已存在的任务不会重复入队 —— 客户端可以放心重传（弱网重试、用户重复点击）而不会产生重复渲染。已完成的任务重传后立即可查到终态。
 
 **强制重跑 `?force=true`**：默认幂等短路下，同一张图不会重新渲染。加 `force=true` 可绕过短路：服务端丢弃该 jobId 的旧终态结果与磁盘产物（`result.json`、`run/jump.png`、`run/jump.gif`、`anno/`），状态重置为 `queued` 并重新入队，响应仍是 `202 {"jobId": ...}`（jobId 不变）。适用于「图没变但想重渲」「旧任务失败/needs_correction 想重试」的场景。注意：对正在 `processing` 的任务 force 会额外多跑一次，属预期行为。
 
-错误：
+错误（`message` 为服务端实际返回的中文原因，可直接展示给用户）：
 
-| 状态码 | code | 触发条件 |
-|---|---|---|
-| 400 | `FILE_TOO_LARGE` | 超过 10 MiB |
-| 400 | `UNSUPPORTED_FORMAT` | 文件头是 GIF 或 WEBP |
-| 400 | `NOT_AN_IMAGE` | 文件头既不是 PNG/JPEG 也不是 GIF/WEBP |
-| 503 | `QUEUE_UNAVAILABLE` | Redis 不可达 |
+| 状态码 | code | message | 触发条件 |
+|---|---|---|---|
+| 400 | `FILE_TOO_LARGE` | 图片超过 10 MiB 上限，请压缩后重传。 | 超过 10 MiB |
+| 400 | `UNSUPPORTED_FORMAT` | 暂不支持 GIF / WEBP，请上传 PNG 或 JPEG 图片。 | 文件头是 GIF 或 WEBP |
+| 400 | `NOT_AN_IMAGE` | 文件头不是已知图片格式，请上传 PNG 或 JPEG 图片。 | 文件头不是已知图片格式 |
+| 503 | `QUEUE_UNAVAILABLE` | 任务队列（Redis）不可用，请稍后重试。 | Redis 不可达 |
+| 422 | `INVALID_REQUEST` | 请求参数校验失败，请检查字段名、类型与取值。 | 缺 `file` 字段等框架级校验失败 |
 
 ### 2.3 `GET /v1/characters/{jobId}` — 轮询状态（Unity 生产逻辑只依赖这个端点）
 
@@ -82,7 +93,13 @@ Content-Type: image/png
 **① 非终态** — `queued` 排队中，`processing` 正在渲染。无进度百分比。
 
 ```json
-{"status": "processing", "updatedAt": "2026-09-05T15:19:12"}
+{
+  "status": "processing",
+  "message": "渲染中，正在生成 run / jump 精灵表。",
+  "statusUrl": "http://localhost:8000/v1/characters/char_9c3ff81ce4ea",
+  "viewUrl": "http://localhost:8000/v1/characters/char_9c3ff81ce4ea/view",
+  "updatedAt": "2026-09-05T15:19:12"
+}
 ```
 
 **② `ready`** — 渲染成功，可以下载精灵表了。`animations` 恒含且仅含 `run` 与 `jump` 两个键（契约校验器强制）。
@@ -90,19 +107,22 @@ Content-Type: image/png
 ```json
 {
   "status": "ready",
+  "message": "渲染完成，可按 spriteSheetUrl 下载精灵表。",
+  "statusUrl": "http://localhost:8000/v1/characters/char_9c3ff81ce4ea",
+  "viewUrl": "http://localhost:8000/v1/characters/char_9c3ff81ce4ea/view",
   "characterId": "char_9c3ff81ce4ea",
   "animations": {
-    "run":  {"spriteSheetUrl": "/artifacts/char_9c3ff81ce4ea/run.png",
+    "run":  {"spriteSheetUrl": "http://localhost:8000/artifacts/char_9c3ff81ce4ea/run.png",
              "frameCount": 10, "fps": 15, "frameWidth": 241, "frameHeight": 275,
              "footAnchor": {"x": 120, "y": 275}},
-    "jump": {"spriteSheetUrl": "/artifacts/char_9c3ff81ce4ea/jump.png",
+    "jump": {"spriteSheetUrl": "http://localhost:8000/artifacts/char_9c3ff81ce4ea/jump.png",
              "frameCount": 7,  "fps": 15, "frameWidth": 241, "frameHeight": 275,
              "footAnchor": {"x": 120, "y": 275}}
   }
 }
 ```
 
-`AnimationMeta` 六个字段全部必填，含义见第 3 节。`spriteSheetUrl` 是站内绝对路径，需自行拼上 Base URL。
+`AnimationMeta` 六个字段全部必填，含义见第 3 节。`spriteSheetUrl` 已是完整地址，**直接 GET 即可，不要再拼 Base URL**（服务端落盘的 `result.json` 里仍是相对路径，只在响应出口补全，因此历史任务换部署地址也不会失效）。
 
 **③ `needs_correction`** — 认不出人形，或标注质量不过门禁，需要用户修图/改关节后重传。
 
@@ -110,21 +130,22 @@ Content-Type: image/png
 {
   "status": "needs_correction",
   "reason": "SKELETON_MISFIT",
-  "maskUrl": "/artifacts/char_5a60409ca6d2/anno/mask.png",
+  "message": "关节位置偏离墨迹过远，请对照 /view 页面的关节叠加图重画。",
+  "maskUrl": "http://localhost:8000/artifacts/char_5a60409ca6d2/anno/mask.png",
   "joints": [{"name": "root", "loc": [289, 422], "parent": null}, "... 共 16 项"]
 }
 ```
 
-`reason` 六种取值：
+`reason` 六种取值（`message` 就是服务端返回的中文文案，取自 `contracts.REASON_MESSAGES`）：
 
-| reason | 含义 |
+| reason | message（中文原因） |
 |---|---|
-| `NO_HUMANOID` | 图里找不到人形 |
-| `NO_SKELETON` | 找到人形但推不出骨架 |
-| `MULTIPLE_SKELETONS` | 检出多个人形，无法确定主角 |
-| `NO_CONTOUR` | 提不出单连通轮廓 |
-| `SKELETON_MISFIT` | 关节偏离墨迹过远，超出修复门禁 |
-| `ANALYZE_FAILED` | 标注服务（TorchServe）本身失败 |
+| `NO_HUMANOID` | 画面里没有找到人形，请只画一个完整的火柴人后重传。 |
+| `NO_SKELETON` | 找到了人形但推不出骨架，请确保头、躯干与四肢线条清晰相连。 |
+| `MULTIPLE_SKELETONS` | 画面里检出多个人形，请只保留一个主角后重传。 |
+| `NO_CONTOUR` | 提不出闭合轮廓，请检查线条是否断裂或过于潦草。 |
+| `SKELETON_MISFIT` | 关节位置偏离墨迹过远，请对照 /view 页面的关节叠加图重画。 |
+| `ANALYZE_FAILED` | 标注服务调用失败，请稍后重试；持续失败请检查 TorchServe 是否健康。 |
 
 `joints` 长度是 **16 或 0**：早期失败（如 `NO_HUMANOID`）时标注文件尚未生成，返回空数组，此时客户端只能提示重拍，没有可编辑的关节。关节表见第 4 节。
 
@@ -133,12 +154,16 @@ Content-Type: image/png
 **④ `failed`** — 基础设施故障，重传可能成功。
 
 ```json
-{"status": "failed", "code": "RENDER_CRASHED"}
+{
+  "status": "failed",
+  "code": "RENDER_CRASHED",
+  "message": "渲染子进程异常退出或结果文件损坏，自动重试后仍失败。"
+}
 ```
 
-实际会出现的 `code`：`RENDER_TIMEOUT`（单次渲染超 120s）、`RENDER_CRASHED`（渲染子进程崩溃，或结果文件损坏；已自动重试 1 次仍失败）、`ASSET_MISSING`（渲染依赖的资产缺失）。
+实际会出现的 `code`：`RENDER_TIMEOUT`（单次渲染超 120s）、`RENDER_CRASHED`（渲染子进程崩溃，或结果文件损坏；已自动重试 1 次仍失败）、`ASSET_MISSING`（渲染依赖的资产缺失）。中文原因取自 `contracts.ERROR_MESSAGES`。
 
-**⑤ 未知 jobId** — `404` + `{"code":"JOB_NOT_FOUND"}`。
+**⑤ 未知 jobId** — `404` + `{"code":"JOB_NOT_FOUND","message":"任务不存在或已过期，请重新上传原图。"}`。
 
 任务状态在 Redis 中保留 **24 小时**；过期后由磁盘快照 `out/jobs/{jobId}/result.json` 重建，所以终态通常仍能查到。快照损坏时视同不存在（404），客户端重传即可（幂等，同图同 jobId）。
 
@@ -157,7 +182,7 @@ Content-Type: image/png
 /artifacts/{jobId}/anno/char_cfg.yaml 16 关节标注
 ```
 
-目录本身不可列出（无索引页），只能按具体文件名取。
+目录本身不可列出（无索引页），只能按具体文件名取。产物不存在时返回 `404` + `{"code":"NOT_FOUND","message":"请求的路径不存在，请检查接口地址与 jobId。"}`（JSON，不再是框架默认的英文 `{"detail":"Not Found"}`）。
 
 ### 2.5 `GET /v1/characters/{jobId}/detail` — 全部产物汇总（审查用，非契约）
 
@@ -174,23 +199,25 @@ Content-Type: image/png
   "status": "ready",
   "reason": null,
   "code": null,
+  "message": null,
   "renderedAt": "2026-09-05T23:19:56+08:00",
-  "viewUrl": "/v1/characters/char_9c3ff81ce4ea/view",
-  "inputUrl": "/artifacts/char_9c3ff81ce4ea/input.png",
+  "viewUrl": "http://localhost:8000/v1/characters/char_9c3ff81ce4ea/view",
+  "detailUrl": "http://localhost:8000/v1/characters/char_9c3ff81ce4ea/detail",
+  "inputUrl": "http://localhost:8000/artifacts/char_9c3ff81ce4ea/input.png",
   "annotation": {
-    "maskUrl": "/artifacts/char_9c3ff81ce4ea/anno/mask.png",
-    "textureUrl": "/artifacts/char_9c3ff81ce4ea/anno/texture.png",
-    "charCfgUrl": "/artifacts/char_9c3ff81ce4ea/anno/char_cfg.yaml",
+    "maskUrl": "http://localhost:8000/artifacts/char_9c3ff81ce4ea/anno/mask.png",
+    "textureUrl": "http://localhost:8000/artifacts/char_9c3ff81ce4ea/anno/texture.png",
+    "charCfgUrl": "http://localhost:8000/artifacts/char_9c3ff81ce4ea/anno/char_cfg.yaml",
     "width": 517,
     "height": 595,
     "joints": [{"name": "root", "loc": [289, 422], "parent": null}, "... 共 16 项"]
   },
   "animations": {
     "run": {
-      "spriteSheetUrl": "/artifacts/char_9c3ff81ce4ea/run.png",
+      "spriteSheetUrl": "http://localhost:8000/artifacts/char_9c3ff81ce4ea/run.png",
       "frameCount": 10, "fps": 15, "frameWidth": 241, "frameHeight": 275,
       "footAnchor": {"x": 120, "y": 275},
-      "gifUrl": "/artifacts/char_9c3ff81ce4ea/run.gif"
+      "gifUrl": "http://localhost:8000/artifacts/char_9c3ff81ce4ea/run.gif"
     },
     "jump": { "... 同上" }
   }
@@ -203,14 +230,15 @@ Content-Type: image/png
 |---|---|---|
 | `status` | string | 五态之一，与 2.3 一致 |
 | `reason` / `code` | string \| null | 分别对应 `needs_correction` / `failed`，其余状态为 `null` |
+| `message` | string \| null | `reason` / `code` 的中文原因；`ready` 等无错时为 `null` |
 | `renderedAt` | string \| null | 产物落盘时间，带时区偏移；尚无产物时为 `null` |
-| `inputUrl` | string \| null | 上传的原图 |
+| `inputUrl` | string \| null | 上传的原图（完整地址） |
 | `annotation.width` / `.height` | int \| null | 标注画布尺寸，**`joints[].loc` 的坐标系就是它**；无标注时为 `null` |
 | `annotation.joints` | array | 16 项或空数组，见第 4 节 |
 | `animations` | object | 只在 `ready` 时非空；`{}` 表示无动画产物 |
 | `animations.*.gifUrl` | string \| null | 未裁切的渲染原件。**历史任务为 `null`**（GIF 留存是后加的能力，早于该改动完成的任务没有此文件） |
 
-未知 jobId 同样返回 `404` + `{"code":"JOB_NOT_FOUND"}`。
+未知 jobId 同样返回 `404` + `{"code":"JOB_NOT_FOUND","message":"…"}`。
 
 ### 2.6 `GET /v1/characters/{jobId}/view` — 单页审查 HTML
 
@@ -222,7 +250,27 @@ Content-Type: image/png
 - texture 上叠红色 mask + 青色关节点：**红区之外的黑笔画会在成片里彻底消失**，一眼看出哪些笔画丢了、关节吸附到了哪里；
 - Unity 精灵表原图（点击看原尺寸）+ 帧数 / 帧尺寸 / fps / 脚底锚点。
 
-产物缺失时显示占位块，不会产生坏图链接。未知 jobId 返回 `404` + `{"code":"JOB_NOT_FOUND"}`（JSON，不是 HTML）。
+产物缺失时显示占位块，不会产生坏图链接。页面顶部徽章直接写出中文原因（如 `needs_correction · NO_HUMANOID（画面里没有找到人形…）`）。未知 jobId 返回 `404` + `{"code":"JOB_NOT_FOUND"}`（JSON，不是 HTML）。
+
+### 2.7 关卡审查端点（预览用，非契约）
+
+关卡链路的契约见 `level-image-to-json-api.md`；两个审查端点与 2.5 / 2.6 同构，专为人工预览而设：
+
+```
+GET /v1/levels/{jobId}/detail   一次拿到关卡图、识别几何、可玩性分析与全部产物的完整地址
+GET /v1/levels/{jobId}/view     同一份信息的单页 HTML，浏览器直开即可预览
+```
+
+`/view` 一页含：
+
+- 上传原图、透视拉正图、服务端叠加图、纸张/墨迹遮罩；
+- **浏览器端重绘的识别叠加图**：绿线 = 可达路径上的平台，橙线 = 未纳入路径，红框 = 终点区域与复核候选，紫点 = 出生点（不依赖服务端的 `overlay.png`，缺它也能预览）；
+- 平台清单表（起点/终点/长度/置信度/是否在可达路径上）；
+- 可玩性分析：判定、出生/终点平台、路径、角色能力参数、逐条中文告警（需要多少像素 vs 实际多少像素）；
+- `needs_review` 时列出复核原因、候选区域与重拍建议；`failed` 时列出错误码与中文原因；
+- 产物完整地址清单（含 `level.json` / `analysis.json` / `transform.json` / `llm-audit.json`）。
+
+`/detail` 比契约端点多三件事：① 任何状态都能调（含 `queued`，带中文阶段名）；② 产物按**磁盘实际存在**判定，缺失一律 `null`；③ Redis 过期后仍能从 `level.json` / `analysis.json` 重建预览。未知 jobId 返回 `404` + `{"error":{"code":"JOB_NOT_FOUND","message":"…"}}`（关卡链路的信封体）。
 
 ---
 
@@ -295,17 +343,38 @@ POST ──202──> queued ──> processing ──┬──> ready          
 
 ## 6. 错误码总表
 
-| code | 出现位置 | 含义 |
+错误体一律是 `{"code": "<码>", "message": "<中文原因>"}`；`message` 取自 `contracts.ERROR_MESSAGES`，可直接展示给用户。
+
+| code | 出现位置 | message（中文原因） |
 |---|---|---|
-| `FILE_TOO_LARGE` | POST 400 | 超过 10 MiB |
-| `NOT_AN_IMAGE` | POST 400 | 文件头不是已知图片格式 |
-| `UNSUPPORTED_FORMAT` | POST 400 | 是 GIF / WEBP，当前只收 PNG / JPEG |
-| `JOB_NOT_FOUND` | GET 404 | jobId 不存在，或磁盘快照损坏 |
-| `QUEUE_UNAVAILABLE` | POST 503 | Redis 不可达 |
-| `RENDER_TIMEOUT` | `failed.code` | 单次渲染超 120 s |
-| `RENDER_CRASHED` | `failed.code` | 渲染子进程崩溃或结果损坏，重试后仍失败 |
-| `ASSET_MISSING` | `failed.code` | 渲染依赖资产缺失 |
-| `INTERNAL` | 契约保留 | 当前代码路径不产出，客户端仍应兜底处理 |
+| `FILE_TOO_LARGE` | POST 400 | 图片超过 10 MiB 上限，请压缩后重传。 |
+| `NOT_AN_IMAGE` | POST 400 | 文件头不是已知图片格式，请上传 PNG 或 JPEG 图片。 |
+| `UNSUPPORTED_FORMAT` | POST 400 | 暂不支持 GIF / WEBP，请上传 PNG 或 JPEG 图片。 |
+| `JOB_NOT_FOUND` | GET 404 | 任务不存在或已过期，请重新上传原图。 |
+| `QUEUE_UNAVAILABLE` | POST/GET 503 | 任务队列（Redis）不可用，请稍后重试。 |
+| `RENDER_TIMEOUT` | `failed.code` | 单次渲染超过 120 秒，自动重试后仍失败，请重试或简化画面。 |
+| `RENDER_CRASHED` | `failed.code` | 渲染子进程异常退出或结果文件损坏，自动重试后仍失败。 |
+| `ASSET_MISSING` | `failed.code` | 渲染依赖的资产缺失，请检查服务端部署是否完整。 |
+| `INTERNAL` | 未捕获异常 500 | 服务端内部错误，请查看 out/logs 下的当天日志。 |
+
+框架级错误（不属于业务契约，但同样带中文 `message`）：
+
+| code | 状态码 | 触发条件 |
+|---|---|---|
+| `NOT_FOUND` | 404 | 路径写错、方法不存在、产物文件不在磁盘上 |
+| `METHOD_NOT_ALLOWED` | 405 | 路径对但方法不对（如 `DELETE /v1/characters`） |
+| `INVALID_REQUEST` | 400 / 422 | 缺必填字段、类型不对等参数校验失败（`details.errors` 给字段级细节） |
+| `HTTP_<状态码>` | 其余 | 其他框架抛出的 HTTP 异常，按状态码给中文说明 |
+
+框架级错误体同时带信封键，两条链路的客户端都能直接读：
+
+```json
+{
+  "code": "NOT_FOUND",
+  "message": "请求的路径不存在，请检查接口地址与 jobId。",
+  "error": {"code": "NOT_FOUND", "message": "同上", "retryable": false, "requestId": "req_…"}
+}
+```
 
 ---
 
@@ -340,12 +409,22 @@ public class Joint {
     public string parent;   // null = 根节点
 }
 
-public class JobAccepted { public string jobId; }
-public class ErrorBody   { public string code; }
+public class JobAccepted {
+    public string jobId;
+    public string statusUrl;   // 完整地址，轮询直接用它
+    public string viewUrl;     // 完整地址，浏览器可直开的审查页
+}
+
+public class ErrorBody {
+    public string code;
+    public string message;     // 中文原因，可直接上屏
+}
 
 // 五态共用一个类，按 status 分派：无关字段为 null，一次反序列化即可
 public class CharacterStatus {
     public string status;
+    public string message;                                // 任意状态都有：中文状态/失败原因
+    public string statusUrl, viewUrl;                      // 完整地址
     public string updatedAt;                             // 非终态。UTC，无 Z 后缀
     public string characterId;                           // ready
     public Dictionary<string, AnimationMeta> animations;  // ready。含且仅含 "run" / "jump"
@@ -353,6 +432,13 @@ public class CharacterStatus {
     public string maskUrl;                                // needs_correction。文件可能不存在
     public List<Joint> joints;                            // needs_correction。16 项或空
     public string code;                                   // failed
+}
+
+// *Url 已是完整地址；兼容旧服务端的站内相对路径，不要直接 baseUrl + url
+public static class Urls {
+    public static string Resolve(string baseUrl, string url) =>
+        string.IsNullOrEmpty(url) ? url
+        : (url.StartsWith("http://") || url.StartsWith("https://")) ? url : baseUrl.TrimEnd('/') + url;
 }
 ```
 
@@ -372,29 +458,30 @@ public IEnumerator UploadAndBuild(string baseUrl, byte[] png) {
     yield return post.SendWebRequest();
     if (post.result != UnityWebRequest.Result.Success) {
         var err = JsonConvert.DeserializeObject<ErrorBody>(post.downloadHandler.text);
-        Debug.LogError($"上传失败: {err?.code}");   // FILE_TOO_LARGE / NOT_AN_IMAGE / ...
+        Debug.LogError($"上传失败: {err?.code} {err?.message}");   // message 是中文原因，可直接上屏
         yield break;
     }
-    string jobId = JsonConvert.DeserializeObject<JobAccepted>(post.downloadHandler.text).jobId;
+    var accepted = JsonConvert.DeserializeObject<JobAccepted>(post.downloadHandler.text);
+    string jobId = accepted.jobId;
 
     // ② 轮询到终态。实测约 20s；最坏留 5 分钟以上
     CharacterStatus st = null;
     for (float t = 0; t < 300f; t += 1f) {
-        using var get = UnityWebRequest.Get($"{baseUrl}/v1/characters/{jobId}");
+        using var get = UnityWebRequest.Get(Urls.Resolve(baseUrl, accepted.statusUrl));
         yield return get.SendWebRequest();
         st = JsonConvert.DeserializeObject<CharacterStatus>(get.downloadHandler.text);
         if (st != null && GameContracts.IsTerminal(st.status)) break;
         yield return new WaitForSeconds(1f);
     }
     if (st == null || st.status != GameContracts.Ready) {
-        Debug.LogWarning($"未成功: {st?.status} {st?.reason}{st?.code}");   // 引导重拍或重传
+        Debug.LogWarning($"未成功: {st?.status} {st?.message}");   // 中文原因，引导重拍或重传
         yield break;
     }
 
     // ③ 下载精灵表并切帧。run 与 jump 的帧尺寸必然相同，可共用切帧参数
     foreach (var kv in st.animations) {
         var meta = kv.Value;
-        using var tex = UnityWebRequestTexture.GetTexture(baseUrl + meta.spriteSheetUrl);
+        using var tex = UnityWebRequestTexture.GetTexture(Urls.Resolve(baseUrl, meta.spriteSheetUrl));
         yield return tex.SendWebRequest();
         var sheet = DownloadHandlerTexture.GetContent(tex);
         sheet.wrapMode = TextureWrapMode.Clamp;
@@ -408,12 +495,60 @@ public IEnumerator UploadAndBuild(string baseUrl, byte[] png) {
 
 ## 8. 已知边界
 
-按影响排序，前两条会直接阻塞客户端接入：
+按影响排序，第一条会直接阻塞公网部署：
 
-1. **服务端未配置 CORS**。Unity WebGL 跑在浏览器里，若页面与 API 不同源，所有请求都会被浏览器拦下。两种解法：把 WebGL 构建部署到与 API 同源的路径下；或给 FastAPI 加 `CORSMiddleware` 并显式允许客户端来源。接入前需先确认部署形态。
-2. **全部端点无鉴权**。`/artifacts/**`（含 `anno/` 全部中间产物）、`/detail`、`/view` 都是公开可读的，任何知道 jobId 的人都能取到图。当前只适用于内网与本地开发；公网部署前必须加访问控制。
-3. **没有列表端点**。拿不到"所有角色"清单，只能按已知 jobId 查询。jobId 需客户端自行持久化。
-4. **关节不可回传**。`needs_correction` 时服务端只给出关节位置供展示，没有 PATCH 端点；修正靠引导用户改图后重新上传。注意幂等按文件内容计算，图没变则 jobId 不变、不会重渲染。
-5. **`gifUrl` 对历史任务为 `null`**。GIF 留存是后加的能力，在该改动之前完成的任务目录里没有这个文件。仅影响审查视图，不影响 Unity 取精灵表。
-6. **不要下载 `anno/image.png`**。它是标注服务存的原图副本，实测可达 19 MB。需要原图请用 `inputUrl`（`input.png`）。
-7. **关卡解析尚未实现**。本文档只覆盖角色链路；关卡（`/v1/levels`）与可玩性校验还没动工，接口未定。
+1. **全部端点无鉴权**。`/artifacts/**`（含 `anno/` 全部中间产物）、`/detail`、`/view` 都是公开可读的，任何知道 jobId 的人都能取到图；CORS 又默认放开所有来源。当前只适用于内网与本地开发，公网部署前必须加访问控制并把 `CORS_ALLOW_ORIGINS` 收窄。
+2. **没有列表端点**。拿不到"所有角色"清单，只能按已知 jobId 查询。jobId 需客户端自行持久化。
+3. **关节不可回传**。`needs_correction` 时服务端只给出关节位置供展示，没有 PATCH 端点；修正靠引导用户改图后重新上传。注意幂等按文件内容计算，图没变则 jobId 不变、不会重渲染。
+4. **`gifUrl` 对历史任务为 `null`**。GIF 留存是后加的能力，在该改动之前完成的任务目录里没有这个文件。仅影响审查视图，不影响 Unity 取精灵表。
+5. **不要下载 `anno/image.png`**。它是标注服务存的原图副本，实测可达 19 MB。需要原图请用 `inputUrl`（`input.png`）。
+6. **产物文件内部的 URL 仍是相对路径**。只有接口响应会补全成完整地址；直接下载的 `level.json` 里 `background.imageUrl` 依旧是 `/artifacts/…`（为了让产物跳机器可用）。客户端请用接口响应里的地址，或对文件内容自行拼 Base URL。
+7. **关卡链路另有契约文档**。本文以角色链路为主；关卡（`/v1/levels`）的上传/轮询/终态契约见 `level-image-to-json-api.md`，审查端点见 2.7。
+
+---
+
+## 9. 跨域、完整地址与服务端日志（运维/联调）
+
+### 9.1 跨域
+
+已挂 `CORSMiddleware`，全部走环境变量（compose 里已接好，`.env` 有注释模板）：
+
+| 环境变量 | 默认 | 说明 |
+|---|---|---|
+| `CORS_ALLOW_ORIGINS` | `*` | 逗号分隔的来源白名单；`*` 表示全放开 |
+| `CORS_ALLOW_ORIGIN_REGEX` | 空 | 来源正则，适合多子域 |
+| `CORS_ALLOW_METHODS` | `*` | 逗号分隔，如 `GET,POST` |
+| `CORS_ALLOW_HEADERS` | `*` | 逗号分隔，如 `Content-Type,X-Trace-Id` |
+| `CORS_EXPOSE_HEADERS` | `Content-Length,Content-Type` | 允许前端 JS 读到的响应头 |
+| `CORS_ALLOW_CREDENTIALS` | `false` | 要带 Cookie/Authorization 就置 `true`，**但必须同时把来源配成具体值** |
+| `CORS_MAX_AGE` | `600` | 预检结果缓存秒数 |
+
+两个坑：① 来源为 `*` 时浏览器不允许携带凭证，服务端会自动把 `allow_credentials` 关掉并在日志里告警；② CORS 中间件在栈最外层，预检 `OPTIONS` 不会进业务逻辑。
+
+### 9.2 完整地址
+
+响应里的站内路径在**出口处**补全成完整地址，基址优先取 `PUBLIC_BASE_URL`，未配置时按请求的 Host 推导。反向代理/端口映射（如 NAS 上把 8000 映射到别的端口）下必须显式配置，否则拿到的是内部地址：
+
+```bash
+PUBLIC_BASE_URL=http://192.168.1.20:8000 docker compose up -d api
+```
+
+磁盘上的 `result.json` / `level.json` 始终存相对路径：它们跟部署地址无关，换机器、换端口后历史任务依旧可用。
+
+### 9.3 日志
+
+全链路中文日志，同时输出到控制台（`docker logs`）与文件：
+
+```
+out/logs/api-2026-09-10.log              接口进程（含每个请求的进出与耗时）
+out/logs/character-worker-2026-09-10.log  角色渲染 worker
+out/logs/render-runner-2026-09-10.log     角色渲染子进程
+out/logs/level-worker-2026-09-10.log      关卡解析 worker
+out/logs/level-runner-2026-09-10.log      关卡解析子进程
+```
+
+容器内写 `/data/out/logs`，已由 compose 的 `./out:/data/out` 挂到宿主机 `out/logs`。按本地日期分文件，跳天自动切新文件（不需重启）；一个进程一个文件，避免多进程争抢同一句柄。
+
+格式：`2026-09-10 19:41:35 [INFO] app.api.levels: 关卡任务 level_fd33 已创建并入队…`。`LOG_LEVEL` 调级别（默认 INFO；`/healthz` 与 `/artifacts/**` 降到 DEBUG，不刷屏）；`LOG_KEEP_DAYS` 大于 0 才会清理过期日志，默认 0 = 永久保留。
+
+排查一个关卡任务的典型路径：`grep level_<jobId> out/logs/*.log` —— 会依次看到入队、逐阶段进度（中文阶段名）、候选检测数量、语义复核来源与降级原因、几何门禁结果、可玩性告警、终态。

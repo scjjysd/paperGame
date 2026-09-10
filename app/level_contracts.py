@@ -10,6 +10,46 @@ SCHEMA_VERSION = '1.0'
 ALGORITHM_VERSION = 'level-parser-1.0.0'
 ALGORITHM_MAJOR_VERSION = '1'
 
+# 错误码 -> 中文原因：响应体除了 code 还必须给出人能直接看懂的说明。
+# worker 写 result.json 与 API 即时报错共用本表，避免同一码在两处文案不一致。
+UNKNOWN_LEVEL_MESSAGE = '关卡解析失败，请查看服务端 out/logs 下的当天日志。'
+LEVEL_ERROR_MESSAGES = {
+    'UNSUPPORTED_SCHEMA_VERSION': '服务端不支持该 schemaVersion，当前只接受 1.0。',
+    'INVALID_PLAYABILITY_PROFILE': '角色能力参数缺失或越界，请对照文档校验 playabilityProfile。',
+    'FILE_TOO_LARGE': '图片不能超过 10 MiB，请压缩后重传。',
+    'UNSUPPORTED_IMAGE_FORMAT': '仅支持 JPEG 或 PNG，请转换格式后重传。',
+    'IMAGE_DECODE_FAILED': '图片无法安全解码：可能已损坏、边长不在 800~12000 像素之间、超过 4000 万像素或为动图。',
+    'JOB_IN_PROGRESS': '任务正在处理中，不能强制重跑，请等当前任务进入终态。',
+    'QUEUE_UNAVAILABLE': '任务队列（Redis）不可用，请稍后重试。',
+    'JOB_NOT_FOUND': '任务不存在或已过期，请重新上传关卡图。',
+    'PROCESSING_TIMEOUT': '关卡解析超时（单次 90 秒，已自动重试一次）。',
+    'PROCESSING_CRASHED': '关卡解析进程异常退出或结果不符合契约，已自动重试一次。',
+    'INTERNAL': '服务端内部错误，请查看 out/logs 下的当天日志。',
+}
+
+# 任务状态 -> 中文说明，审查页与日志统一使用
+LEVEL_STATUS_MESSAGES = {
+    'queued': '排队中，等待关卡 worker 领取。',
+    'processing': '解析中，正在拉正纸张、识别平台与终点。',
+    'ready': '解析完成，关卡可玩。',
+    'needs_fix': '解析完成，但存在可玩性问题（跳不过去或终点悬空）。',
+    'needs_review': '识别证据不足，需要人工复核或重拍。',
+    'failed': '解析失败，属于技术故障，可重试。',
+}
+
+# 解析阶段 -> 中文说明（stage 本身是契约值，保持英文不变）
+LEVEL_STAGE_MESSAGES = {
+    'waiting': '等待中',
+    'validating_upload': '校验上传图',
+    'rectifying_paper': '拉正纸张',
+    'detecting_platforms': '识别平台',
+    'detecting_goal': '识别终点',
+    'semantic_review': '语义复核',
+    'validating_geometry': '校验几何',
+    'analyzing_playability': '分析可玩性',
+    'publishing_artifacts': '发布产物',
+}
+
 
 def _artifact_url(value: str) -> str:
     if not value.startswith('/artifacts/'):

@@ -2,27 +2,43 @@
 
 与 /v1/characters/{id} 的分工：后者是 Unity 契约（contracts.py 为唯一真源，不掺调试字段），
 本模块是给人看的审查视图，故独立成 router —— Unity 侧镜像 contracts.py 时不会看到这两个端点。
+
+页面样式与拼装函数复用 review_html，关卡审查页（level_view）用的是同一套。
 """
 import json
 from datetime import datetime
 from html import escape
 from pathlib import Path
 from typing import Dict, Optional
-from urllib.parse import quote
 
 import yaml
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 
-from app.api.characters import _error
+from app.api import errors, urls
+from app.api.review_html import badge, figure, header, page, section
 from app.services.job_store import JobStore
 
 MOTIONS = ('run', 'jump')
+STATUS_COLOR = {'ready': '#1a7f37', 'needs_correction': '#9a6700', 'failed': '#cf222e'}
+
+# 角色页特有样式：精灵表播放、mask 红色叠加。通用骨架样式见 review_html.PAGE_CSS
+EXTRA_CSS = """
+.sheet{display:block;max-width:100%;border:1px solid #d1d9e0}
+.playbox{border:1px solid #d1d9e0}
+.play{width:100%;height:100%;background-repeat:no-repeat}
+.overlay img{display:block;max-height:300px;width:auto}
+.maskred{position:absolute;inset:0;background:#ff2828;opacity:.45;
+         mask-size:100% 100%;mask-mode:luminance;
+         -webkit-mask-size:100% 100%;-webkit-mask-source-type:luminance}
+"""
 
 
-def _url(job_id: str, rel: str, job_dir: Path) -> Optional[str]:
+def _url(job_id: str, rel: str, job_dir: Path, base_url: str = '') -> Optional[str]:
     """产物真实存在才给 URL：早期失败时 result.json 的 maskUrl 是无条件写死的，会指向不存在的文件。"""
-    return f'/artifacts/{job_id}/{rel}' if (job_dir / rel).exists() else None
+    if not (job_dir / rel).exists():
+        return None
+    return urls.absolute_url(base_url, f'/artifacts/{job_id}/{rel}')
 
 
 def _load_anno(char_cfg: Path) -> Dict:
@@ -37,72 +53,39 @@ def _load_anno(char_cfg: Path) -> Dict:
     }
 
 
-def collect_detail(job_id: str, job_dir: Path, status: str, result: Optional[Dict]) -> Dict:
-    """扫描 job_dir 汇总审查视图。缺失产物一律 None/空，供页面与客户端降级显示。"""
+def collect_detail(job_id: str, job_dir: Path, status: str, result: Optional[Dict],
+                   base_url: str = '') -> Dict:
+    """扫描 job_dir 汇总审查视图。缺失产物一律 None/空，供页面与客户端降级显示。
+
+    base_url 非空时所有 URL 都是完整地址（浏览器直接可点）；为空则保持站内相对路径。
+    """
     result = result or {}
     result_json = job_dir / 'result.json'
+    reason, code = result.get('reason'), result.get('code')
     return {
         'characterId': job_id,
         'status': status,
-        'reason': result.get('reason'),
-        'code': result.get('code'),
+        'reason': reason,
+        'code': code,
+        # 中文原因与 GET /v1/characters/{id} 同源：reason 走 REASON_MESSAGES，code 走 ERROR_MESSAGES
+        'message': errors.enrich_reason(dict(result)).get('message'),
         'renderedAt': (datetime.fromtimestamp(result_json.stat().st_mtime).astimezone().isoformat(timespec='seconds')
                        if result_json.exists() else None),
-        'viewUrl': f'/v1/characters/{job_id}/view',
-        'inputUrl': _url(job_id, 'input.png', job_dir),
+        'viewUrl': urls.absolute_url(base_url, urls.character_view_path(job_id)),
+        'detailUrl': urls.absolute_url(base_url, urls.character_detail_path(job_id)),
+        'inputUrl': _url(job_id, 'input.png', job_dir, base_url),
         'annotation': {
-            'maskUrl': _url(job_id, 'anno/mask.png', job_dir),
-            'textureUrl': _url(job_id, 'anno/texture.png', job_dir),
-            'charCfgUrl': _url(job_id, 'anno/char_cfg.yaml', job_dir),
+            'maskUrl': _url(job_id, 'anno/mask.png', job_dir, base_url),
+            'textureUrl': _url(job_id, 'anno/texture.png', job_dir, base_url),
+            'charCfgUrl': _url(job_id, 'anno/char_cfg.yaml', job_dir, base_url),
             **_load_anno(job_dir / 'anno' / 'char_cfg.yaml'),
         },
-        # gifUrl 是未裁切的渲染原件，历史 job 目录没有它（GIF 保留是后加的），降级为 None
-        'animations': {m: {**meta, 'gifUrl': _url(job_id, f'{m}.gif', job_dir)}
+        # gifUrl 是未裁切的渲染原件，历史 job 目录没有它（GIF 保留是后加的），降级为 None；
+        # result.json 里的 spriteSheetUrl 存的是相对路径，这里一并补成完整地址
+        'animations': {m: {**urls.absolutize(meta, base_url),
+                           'gifUrl': _url(job_id, f'{m}.gif', job_dir, base_url)}
                        for m, meta in (result.get('animations') or {}).items()},
     }
-
-
-STATUS_COLOR = {'ready': '#1a7f37', 'needs_correction': '#9a6700', 'failed': '#cf222e'}
-
-CSS = """
-*{box-sizing:border-box}
-body{margin:0;background:#f6f8fa;color:#1f2328;
-     font:14px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif}
-header{position:sticky;top:0;z-index:2;padding:14px 20px;background:#fff;border-bottom:1px solid #d1d9e0}
-h1{margin:0;font-size:17px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
-.badge{font-size:12px;color:#fff;padding:2px 9px;border-radius:10px}
-.sum{margin-top:5px;color:#59636e;font-size:12px}
-.sum a{color:#0969da}
-main{padding:18px;display:flex;flex-direction:column;gap:14px}
-section{background:#fff;border:1px solid #d1d9e0;border-radius:8px;padding:12px 16px 16px}
-h2{margin:0 0 10px;font-size:13px;font-weight:600;color:#59636e}
-.row{display:flex;flex-wrap:wrap;gap:16px;align-items:flex-end}
-figure{margin:0;display:flex;flex-direction:column;gap:6px;align-items:center}
-figcaption{font-size:12px;color:#59636e;text-align:center;max-width:300px}
-.alpha{background-image:linear-gradient(45deg,#e9ecef 25%,transparent 25%,transparent 75%,#e9ecef 75%),
-       linear-gradient(45deg,#e9ecef 25%,transparent 25%,transparent 75%,#e9ecef 75%);
-       background-size:16px 16px;background-position:0 0,8px 8px}
-.thumb{display:block;max-height:280px;border:1px solid #d1d9e0}
-.sheet{display:block;max-width:100%;border:1px solid #d1d9e0}
-.missing{display:flex;align-items:center;justify-content:center;width:150px;height:110px;
-         border:1px dashed #d1d9e0;border-radius:6px;color:#8c959f;font-size:12px}
-.playbox{border:1px solid #d1d9e0}
-.play{width:100%;height:100%;background-repeat:no-repeat}
-.overlay{position:relative;display:inline-block;line-height:0}
-.overlay img{display:block;max-height:300px;width:auto}
-.maskred{position:absolute;inset:0;background:#ff2828;opacity:.45;
-         mask-size:100% 100%;mask-mode:luminance;
-         -webkit-mask-size:100% 100%;-webkit-mask-source-type:luminance}
-.overlay svg{position:absolute;inset:0;width:100%;height:100%}
-.meta{font-size:12px;color:#59636e;font-variant-numeric:tabular-nums}
-"""
-
-
-def _figure(url: Optional[str], label: str, cls: str = 'thumb alpha') -> str:
-    """缺图时输出占位块，绝不产生空 src（否则浏览器会把当前页面当图片再请求一遍）。"""
-    body = (f'<img class="{cls}" src="{escape(url, quote=True)}" alt="{escape(label)}">'
-            if url else f'<div class="missing">无 {escape(label)}</div>')
-    return f'<figure>{body}<figcaption>{escape(label)}</figcaption></figure>'
 
 
 def _keyframes(animations: Dict) -> str:
@@ -116,7 +99,7 @@ def _keyframes(animations: Dict) -> str:
 def _player(motion: str, a: Dict) -> str:
     """用 CSS steps() 播精灵表：切帧参数与 Unity 完全同一套，所见即真机效果。"""
     if not a.get('spriteSheetUrl'):
-        return _figure(None, f'{motion} 播放')
+        return figure(None, f'{motion} 播放')
     n, fps = a['frameCount'], a['fps']
     url = escape(a['spriteSheetUrl'], quote=True)
     return (f'<figure><div class="alpha playbox" '
@@ -134,7 +117,7 @@ def _overlay(anno: Dict) -> str:
     """
     texture, mask = anno.get('textureUrl'), anno.get('maskUrl')
     if not (texture and mask):
-        return _figure(None, 'mask 叠加 + 关节')
+        return figure(None, 'mask 叠加 + 关节')
     w, h = anno.get('width') or 0, anno.get('height') or 0
     radius = max(2, min(w, h) // 90) if w and h else 3
     circles = ''.join(
@@ -148,19 +131,8 @@ def _overlay(anno: Dict) -> str:
             f'{svg}</div><figcaption>mask 叠加 + 关节</figcaption></figure>')
 
 
-def build_detail_html(detail: Dict) -> str:
-    """detail 字典 -> 单页 HTML。纯函数不碰磁盘（照 review_batch.build_html 的范式，便于离线自检）。"""
-    job_id, status = detail['characterId'], detail['status']
-    animations, anno = detail.get('animations') or {}, detail.get('annotation') or {}
-    label = status + ''.join(f' · {detail[k]}' for k in ('reason', 'code') if detail.get(k))
-    bits = [f'渲染于 {detail["renderedAt"]}' if detail.get('renderedAt') else '尚无产物',
-            f'{len(anno.get("joints") or [])} 关节']
-    if anno.get('width'):
-        bits.append(f'画布 {anno["width"]}x{anno["height"]}')
-
-    players = ''.join(_player(m, animations[m]) for m in MOTIONS if m in animations)
-    gifs = ''.join(_figure(animations.get(m, {}).get('gifUrl'), f'{m}.gif') for m in MOTIONS)
-    sheets = ''.join(
+def _sheets(animations: Dict) -> str:
+    return ''.join(
         f'<figure><div class="meta">{escape(m)}.png · {animations[m]["frameCount"]} 帧 · '
         f'{animations[m]["frameWidth"]}x{animations[m]["frameHeight"]} · '
         f'{animations[m]["fps"]}fps · 脚底锚点 ({animations[m]["footAnchor"]["x"]},'
@@ -169,26 +141,36 @@ def build_detail_html(detail: Dict) -> str:
         f'<img class="sheet alpha" src="{escape(animations[m]["spriteSheetUrl"], quote=True)}" '
         f'alt="{escape(m)} sprite sheet"></a></figure>'
         for m in MOTIONS if animations.get(m, {}).get('spriteSheetUrl'))
-    href = escape(f'/v1/characters/{quote(job_id, safe="")}/detail', quote=True)
 
-    return (
-        '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">'
-        '<meta name="viewport" content="width=device-width,initial-scale=1">'
-        f'<title>{escape(job_id)} · 角色审查</title>'
-        f'<style>{CSS}{_keyframes(animations)}</style></head><body>'
-        f'<header><h1>{escape(job_id)}'
-        f'<span class="badge" style="background:{STATUS_COLOR.get(status, "#59636e")}">'
-        f'{escape(label)}</span></h1>'
-        f'<div class="sum">{escape(" · ".join(bits))} · <a href="{href}">detail JSON</a></div>'
-        '</header><main>'
-        f'<section><h2>原图与动画</h2><div class="row">'
-        f'{_figure(detail.get("inputUrl"), "原图")}{players}{gifs}</div></section>'
-        '<section><h2>标注 · 红色 = mask 覆盖（留在原色的笔画会被丢弃）；青点 = 吸附后关节</h2>'
-        f'<div class="row">{_overlay(anno)}{_figure(anno.get("textureUrl"), "texture")}'
-        f'{_figure(anno.get("maskUrl"), "mask")}</div></section>'
-        + (f'<section><h2>Unity 精灵表（点击看原尺寸）</h2><div class="row">{sheets}</div></section>'
-           if sheets else '')
-        + '</main></body></html>')
+
+def build_detail_html(detail: Dict) -> str:
+    """detail 字典 -> 单页 HTML。纯函数不碰磁盘（照 review_batch.build_html 的范式，便于离线自检）。"""
+    job_id, status = detail['characterId'], detail['status']
+    animations, anno = detail.get('animations') or {}, detail.get('annotation') or {}
+    label = status + ''.join(f' · {detail[k]}' for k in ('reason', 'code') if detail.get(k))
+    if detail.get('message'):
+        label += f'（{detail["message"]}）'
+    bits = [f'渲染于 {detail["renderedAt"]}' if detail.get('renderedAt') else '尚无产物',
+            f'{len(anno.get("joints") or [])} 关节']
+    if anno.get('width'):
+        bits.append(f'画布 {anno["width"]}x{anno["height"]}')
+    detail_href = escape(detail.get('detailUrl') or urls.character_detail_path(job_id), quote=True)
+    summary = escape(' · '.join(bits)) + f' · <a href="{detail_href}">detail JSON</a>'
+
+    players = ''.join(_player(m, animations[m]) for m in MOTIONS if m in animations)
+    gifs = ''.join(figure(animations.get(m, {}).get('gifUrl'), f'{m}.gif') for m in MOTIONS)
+    sheets = _sheets(animations)
+    body = (
+        section('原图与动画', f'<div class="row">{figure(detail.get("inputUrl"), "原图")}'
+                             f'{players}{gifs}</div>')
+        + section('标注 · 红色 = mask 覆盖（留在原色的笔画会被丢弃）；青点 = 吸附后关节',
+                  f'<div class="row">{_overlay(anno)}{figure(anno.get("textureUrl"), "texture")}'
+                  f'{figure(anno.get("maskUrl"), "mask")}</div>')
+        + section('Unity 精灵表（点击看原尺寸）', f'<div class="row">{sheets}</div>')
+    )
+    return page(f'{job_id} · 角色审查',
+                header(job_id, badge(label, STATUS_COLOR.get(status, '#59636e')), summary),
+                body, EXTRA_CSS + _keyframes(animations))
 
 
 router = APIRouter(prefix='/v1/characters', tags=['characters'])
@@ -199,9 +181,11 @@ def _lookup(job_id: str, request: Request):
     store: JobStore = request.app.state.store
     data = store.get(job_id)
     if data is None:
-        return None, _error(404, 'JOB_NOT_FOUND')
+        return None, errors.character_error(404, 'JOB_NOT_FOUND')
     result = json.loads(data['result']) if 'result' in data else None
-    return collect_detail(job_id, store.jobs_root / job_id, data['status'], result), None
+    detail = collect_detail(job_id, store.jobs_root / job_id, data['status'], result,
+                            urls.public_base_url(request))
+    return detail, None
 
 
 @router.get('/{job_id}/detail')

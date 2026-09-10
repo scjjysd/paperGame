@@ -4,8 +4,8 @@ import pytest
 from pydantic import ValidationError
 
 from app.contracts import (
-    AnimationMeta, CharacterReady, FootAnchor, JobAccepted, JobFailed,
-    NeedsCorrection, derive_job_id,
+    ERROR_MESSAGES, REASON_MESSAGES, AnimationMeta, CharacterReady, ErrorBody, FootAnchor,
+    JobAccepted, JobFailed, NeedsCorrection, derive_job_id,
 )
 
 
@@ -56,6 +56,38 @@ def test_needs_correction_allows_empty_joints_for_early_failure():
     assert nc.joints == []
 
 
+def test_needs_correction_fills_chinese_reason():
+    """只给 reason 时必须自动补中文原因，客户端可以直接展示。"""
+    nc = NeedsCorrection(status='needs_correction', reason='SKELETON_MISFIT',
+                         maskUrl='/m.png', joints=[])
+    assert nc.message == REASON_MESSAGES['SKELETON_MISFIT']
+
+
 def test_job_accepted_and_failed_shapes():
-    assert JobAccepted(jobId='char_x').model_dump() == {'jobId': 'char_x'}
-    assert JobFailed(status='failed', code='RENDER_TIMEOUT').model_dump() == {'status': 'failed', 'code': 'RENDER_TIMEOUT'}
+    accepted = JobAccepted(jobId='char_x', statusUrl='http://h:8000/v1/characters/char_x',
+                           viewUrl='http://h:8000/v1/characters/char_x/view')
+    assert accepted.model_dump() == {
+        'jobId': 'char_x',
+        'statusUrl': 'http://h:8000/v1/characters/char_x',
+        'viewUrl': 'http://h:8000/v1/characters/char_x/view',
+    }
+    failed = JobFailed(status='failed', code='RENDER_TIMEOUT').model_dump()
+    assert failed['status'] == 'failed' and failed['code'] == 'RENDER_TIMEOUT'
+    assert failed['message'] == ERROR_MESSAGES['RENDER_TIMEOUT']
+
+
+def test_error_body_carries_chinese_message():
+    assert ErrorBody(code='FILE_TOO_LARGE').model_dump() == {
+        'code': 'FILE_TOO_LARGE', 'message': ERROR_MESSAGES['FILE_TOO_LARGE']}
+    # 显式传入的文案不被查表覆盖
+    assert ErrorBody(code='INTERNAL', message='自定义').message == '自定义'
+
+
+def test_every_error_code_and_reason_has_chinese_message():
+    """新增错误码忘补文案就只能落到兜底说明，此处把它卡住。"""
+    from app.contracts import CorrectionReason, ErrorCode
+
+    for code in ErrorCode.__args__:
+        assert ERROR_MESSAGES.get(code), code
+    for reason in CorrectionReason.__args__:
+        assert REASON_MESSAGES.get(reason), reason

@@ -5,11 +5,14 @@ recalibrate after adding real photos. ponytail: v1 handles near-horizontal strai
 curves should move to a contour-polyline model.
 """
 from __future__ import annotations
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Sequence, Tuple
 import cv2
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class PointCandidate:
@@ -264,10 +267,13 @@ def _goals(image, ink):
 
 def detect(rectified_path: Path, job_dir: Path) -> DetectionResult:
     image = cv2.imread(str(rectified_path), cv2.IMREAD_COLOR)
-    if image is None: raise ValueError(f'cannot read rectified image: {rectified_path}')
+    if image is None: raise ValueError(f'无法读取拉正图：{rectified_path}')
     job_dir = Path(job_dir); job_dir.mkdir(parents=True, exist_ok=True)
     ink = _ink_mask(image); red = _red_mask(image)
     path = job_dir / 'ink-mask.png'; tmp = path.with_suffix('.tmp.png')
-    if not cv2.imwrite(str(tmp), ink): raise OSError(f'cannot write {tmp}')
+    if not cv2.imwrite(str(tmp), ink): raise OSError(f'无法写入墨迹遮罩：{tmp}')
     tmp.replace(path)
-    return DetectionResult(_platforms(ink, red, image), _goals(image, ink), path)
+    platforms, goals = _platforms(ink, red, image), _goals(image, ink)
+    logger.info('关卡候选检测完成：平台 %d 条、终点 %d 个（图片 %s）',
+                len(platforms), len(goals), rectified_path)
+    return DetectionResult(platforms, goals, path)

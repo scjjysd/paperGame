@@ -34,6 +34,8 @@ https://api.example.com
 
 所有生产请求必须使用 HTTPS。本文中的相对 URL 均相对于服务地址。
 
+> **实现补充（2026-09-10）**：当前服务端返回的 `statusUrl`、`viewUrl` 与所有产物 `*Url` 都是**完整地址**（已拼上基址），客户端直接请求即可，不要再拼服务地址。基址优先取环境变量 `PUBLIC_BASE_URL`，未配置时按请求 Host 推导；反向代理或端口映射下必须显式配置。磁盘产物（`result.json` / `level.json`）内部仍存相对路径，以保证历史任务跳机器可用。
+
 ### 2.2 内容类型
 
 - 上传：`multipart/form-data`
@@ -150,12 +152,14 @@ HTTP `202 Accepted`
 {
   "jobId": "level_4e91a63bcf21",
   "status": "queued",
-  "statusUrl": "/v1/levels/level_4e91a63bcf21",
+  "message": "排队中，等待关卡 worker 领取。",
+  "statusUrl": "http://localhost:8000/v1/levels/level_4e91a63bcf21",
+  "viewUrl": "http://localhost:8000/v1/levels/level_4e91a63bcf21/view",
   "createdAt": "2026-09-07T08:30:15Z"
 }
 ```
 
-对于相同文件、相同解析参数和相同算法主版本，服务端可以返回已有任务。此时仍返回 `202`，查询接口会给出任务当前或最终状态。
+对于相同文件、相同解析参数和相同算法主版本，服务端可以返回已有任务。此时仍返回 `202`，查询接口会给出任务当前或最终状态（`status` 为已有任务的实际状态）。
 
 ## 5. 查询任务
 
@@ -171,8 +175,12 @@ HTTP `200 OK`
 {
   "jobId": "level_4e91a63bcf21",
   "status": "queued",
+  "message": "排队中，等待关卡 worker 领取。",
+  "statusUrl": "http://localhost:8000/v1/levels/level_4e91a63bcf21",
+  "viewUrl": "http://localhost:8000/v1/levels/level_4e91a63bcf21/view",
   "progress": {
     "stage": "waiting",
+    "stageLabel": "等待中",
     "percent": 0
   },
   "createdAt": "2026-09-07T08:30:15Z",
@@ -186,8 +194,10 @@ HTTP `200 OK`
 {
   "jobId": "level_4e91a63bcf21",
   "status": "processing",
+  "message": "解析中，正在拉正纸张、识别平台与终点。",
   "progress": {
     "stage": "detecting_platforms",
+    "stageLabel": "识别平台",
     "percent": 55
   },
   "createdAt": "2026-09-07T08:30:15Z",
@@ -195,7 +205,7 @@ HTTP `200 OK`
 }
 ```
 
-`progress.stage` 为展示与排查信息，客户端不得依赖完整枚举。当前推荐值包括：
+`progress.stage` 为展示与排查信息，客户端不得依赖完整枚举；`progress.stageLabel` 是服务端给出的中文阶段名（同样不得依赖枚举）。当前推荐值包括：
 
 - `waiting`
 - `validating_upload`
@@ -574,38 +584,104 @@ HTTP `200 OK`
 
 HTTP `429` 和可重试的 `503` 应返回 `Retry-After`。
 
+### 11.1 当前服务端实现补充（2026-09-10）
+
+- `message` 一律为中文，取自 `app/level_contracts.py` 的 `LEVEL_ERROR_MESSAGES`，可直接展示给用户；
+- 已实现的码：`UNSUPPORTED_SCHEMA_VERSION`、`INVALID_PLAYABILITY_PROFILE`、`FILE_TOO_LARGE`、`UNSUPPORTED_IMAGE_FORMAT`、`IMAGE_DECODE_FAILED`、`JOB_IN_PROGRESS`（409，强制重跑碰上未终态任务）、`JOB_NOT_FOUND`、`QUEUE_UNAVAILABLE`、`PROCESSING_TIMEOUT`、`PROCESSING_CRASHED`；`UNAUTHORIZED` / `FORBIDDEN` / `RATE_LIMITED` 尚未实现（全端点无鉴权、无限流）；
+- `IMAGE_DECODE_FAILED` 额外带 `details.reason`（`invalid dimensions` / `too many pixels` / `animated image` / `decompression bomb` / `image decode failed`），`message` 会给出对应的中文说明（如“图片边长必须在 800~12000 像素之间”）；
+- 框架级错误（路径不存在、方法不允许、参数校验失败、未捕获异常）不再返回 FastAPI 默认的英文 `{"detail": …}`，而是同时给扁平键与信封键，两套客户端都能读：
+
+```json
+{
+  "code": "NOT_FOUND",
+  "message": "请求的路径不存在，请检查接口地址与 jobId。",
+  "error": {
+    "code": "NOT_FOUND",
+    "message": "请求的路径不存在，请检查接口地址与 jobId。",
+    "retryable": false,
+    "requestId": "req_01J7BE8WZC6Y2K5Q74H86PRB01"
+  }
+}
+```
+
+框架级 `code` 取值：`NOT_FOUND`（404）、`METHOD_NOT_ALLOWED`（405）、`INVALID_REQUEST`（400/422，`details.errors` 给字段级细节）、`INTERNAL`（500）、`HTTP_<状态码>`（其余）。
+
 ## 12. 调试接口与产物
 
 ### `GET /v1/levels/{jobId}/detail`
 
 返回服务端排查信息。生产环境必须鉴权，不保证面向普通客户端长期兼容。
 
-建议字段：
+**已实现（2026-09-10）**，实际返回字段：
 
-- 各处理阶段耗时；
-- OpenCV 参数快照；
-- 透视矩阵；
-- 候选数量与过滤原因；
-- LLM 模型、提示词版本和结构化分类结果；
-- 置信度明细；
-- Worker 尝试次数；
-- 产物校验和。
+```json
+{
+  "jobId": "level_4e91a63bcf21",
+  "status": "needs_fix",
+  "statusMessage": "解析完成，但存在可玩性问题（跳不过去或终点悬空）。",
+  "message": "解析完成，但存在可玩性问题（1 条可玩性告警：平台间水平距离超过角色能力）",
+  "createdAt": "2026-09-07T08:30:15Z",
+  "updatedAt": "2026-09-07T08:30:22Z",
+  "parsedAt": "2026-09-07T16:30:22+08:00",
+  "schemaVersion": "1.0",
+  "algorithmVersion": "level-parser-1.0.0",
+  "statusUrl": "http://localhost:8000/v1/levels/level_4e91a63bcf21",
+  "detailUrl": "http://localhost:8000/v1/levels/level_4e91a63bcf21/detail",
+  "viewUrl": "http://localhost:8000/v1/levels/level_4e91a63bcf21/view",
+  "progress": null,
+  "canvas": {"width": 1245, "height": 810},
+  "artifacts": {
+    "inputUrl": "http://localhost:8000/artifacts/level_4e91a63bcf21/input.png",
+    "rectifiedImageUrl": "http://…/rectified.png",
+    "overlayImageUrl": "http://…/overlay.png",
+    "paperMaskUrl": "http://…/paper-mask.png",
+    "inkMaskUrl": "http://…/ink-mask.png",
+    "levelJsonUrl": "http://…/level.json",
+    "analysisJsonUrl": "http://…/analysis.json",
+    "transformJsonUrl": "http://…/transform.json",
+    "llmAuditUrl": null,
+    "resultJsonUrl": "http://…/result.json"
+  },
+  "level": {"…": "权威 level 对象，与第 7 节一致"},
+  "analysis": {"…": "可玩性分析，与第 17 节一致"},
+  "review": null,
+  "error": null,
+  "platforms": [
+    {"id": "platform_001", "start": {"x": 83, "y": 681}, "end": {"x": 298, "y": 681},
+     "length": 215, "confidence": 0.98, "onPath": true}
+  ],
+  "playability": "playable",
+  "path": ["platform_001", "platform_002"],
+  "warnings": [],
+  "profile": {"profileVersion": "unity-c1-test-1", "maxJumpRisePixels": 150},
+  "reviewReason": null
+}
+```
+
+与契约端点的三个实质区别：
+
+1. **任何状态都能调**（含 `queued`/`processing`，此时 `progress.stageLabel` 给中文阶段名）；
+2. 产物按**磁盘实际存在**判定，缺失一律 `null`，不会给出坏链接；
+3. Redis 过期后仍能从磁盘的 `level.json` / `analysis.json` 重建预览。
+
+尚未包含的“建议字段”：各阶段耗时、OpenCV 参数快照、产物校验和、Worker 尝试次数（透视矩阵、候选与置信度明细、LLM 审计已分别以 `transform.json`、`platforms`、`llm-audit.json` 给出）。
 
 ### `GET /v1/levels/{jobId}/view`
 
-返回供内部人员查看的调试页面，至少能切换：
+返回供内部人员查看的调试页面。**已实现（2026-09-10）**，返回 `text/html` 单页，浏览器直开即可预览，包含：
 
-- 原图；
-- 拉正图；
-- 墨迹遮罩；
-- 检测叠加图；
-- 平台编号；
-- 出生点和终点区域；
-- 可玩路径和失败跳跃。
+- 上传原图、透视拉正图、服务端检测叠加图、纸张遮罩、墨迹遮罩；
+- **浏览器端重绘的识别叠加图**：绿线 = 可玩路径上的平台，橙线 = 未纳入路径，红框 = 终点区域与复核候选，紫点 = 出生点，并标出平台编号（不依赖服务端 `overlay.png`）；
+- 平台清单表（起点/终点/长度/置信度/是否在可达路径上）；
+- 可玩性分析：判定、出生/终点平台、路径、角色能力参数、逐条中文告警（需要多少像素 vs 实际多少像素）；
+- `needs_review` 时列出复核原因、候选区域与重拍建议；`failed` 时列出错误码与中文原因；
+- 产物完整地址清单（可点开 `level.json` / `analysis.json` / `transform.json` / `llm-audit.json`）。
+
+未知 jobId 返回 `404` + 信封体错误（JSON，不是 HTML）。
 
 ### `/artifacts/{jobId}/{name}`
 
-产物下载接口。生产环境建议使用鉴权下载或短期签名 URL。
+产物下载接口。生产环境建议使用鉴权下载或短期签名 URL。当前实现为 `StaticFiles` 挂载 `OUT_ROOT/jobs`，无鉴权、无目录索引；产物不存在时返回 `404` + `{"code":"NOT_FOUND","message":"…"}`。
 
 ## 13. 幂等规则
 

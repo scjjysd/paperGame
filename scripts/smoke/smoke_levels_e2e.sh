@@ -11,6 +11,8 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 json_field() { python3 -c "import json,sys; print(json.load(sys.stdin)$1)"; }
+# 响应里的 *Url 现在是完整地址；仍兼容旧服务端的站内相对路径
+resolve_url() { case "$1" in http://*|https://*) printf '%s' "$1" ;; *) printf '%s' "$API$1" ;; esac; }
 
 [ -f "$SAMPLE" ] || fail "样本不存在: $SAMPLE"
 curl -sf "$API/healthz" >/dev/null || fail "API 健康检查失败: $API/healthz"
@@ -72,7 +74,7 @@ printf '== 下载并验证三份契约产物 ==\n'
 for SPEC in 'rectifiedImageUrl rectified.png' 'levelJsonUrl level.json' 'analysisJsonUrl analysis.json'; do
   set -- $SPEC
   URL=$(printf '%s' "$BODY" | python3 -c "import json,sys; print(json.load(sys.stdin)['result']['artifacts']['$1'])")
-  curl -sf "$API$URL" -o "$TMP_DIR/$2" || fail "下载 $1 失败"
+  curl -sf "$(resolve_url "$URL")" -o "$TMP_DIR/$2" || fail "下载 $1 失败"
 done
 printf '== 校验下载产物契约 ==\n'
 python3 - "$TMP_DIR" <<'PY'
@@ -115,5 +117,9 @@ printf '== 幂等验证：同图重复提交 ==\n'
 BODY2=$(curl -sf -F "file=@$SAMPLE" "$API/v1/levels") || fail "重复上传失败"
 JOB_ID2=$(printf '%s' "$BODY2" | json_field '["jobId"]')
 [ "$JOB_ID" = "$JOB_ID2" ] || fail "幂等被破坏: $JOB_ID != $JOB_ID2"
+
+printf '== 审查页可打开 ==\n'
+VIEW_URL=$(printf '%s' "$BODY" | json_field '["viewUrl"]')
+curl -sf "$(resolve_url "$VIEW_URL")" | grep -q '关卡审查' || fail "审查页不可用: $VIEW_URL"
 
 printf 'SMOKE_LEVELS_E2E_PASS jobId=%s elapsed=%ss\n' "$JOB_ID" "$ELAPSED"

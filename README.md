@@ -126,10 +126,18 @@ jjhks/
 │       ├── contracts/               契约样例（6 份 JSON）
 │       └── golden/                  黄金真值（Unity 侧对拍，原 C1Levels）
 ├── app/                             ★ 全部服务端应用代码
-│   ├── main.py                      FastAPI 应用工厂：路由 + /artifacts 静态挂载 + /healthz
-│   ├── contracts.py                 ★ Pydantic 契约：五态、错误码、六键动画元数据、derive_job_id
-│   ├── level_contracts.py           关卡契约：LevelReady/NeedsFix/NeedsReview/Failed
-│   ├── api/                         路由层：characters / levels / character_view
+│   ├── main.py                      FastAPI 应用工厂：CORS + 中文日志中间件 + 路由 + /artifacts 静态挂载 + /healthz
+│   ├── log.py                       日志基础设施：中文格式、out/logs 按日期拆分、接管 uvicorn 英文访问日志
+│   ├── contracts.py                 ★ Pydantic 契约：五态、错误码 + 中文文案、六键动画元数据、derive_job_id
+│   ├── level_contracts.py           关卡契约：LevelReady/NeedsFix/NeedsReview/Failed + 错误码/状态/阶段中文文案
+│   ├── api/                         路由层
+│   │   ├── characters.py            角色上传与轮询
+│   │   ├── levels.py                关卡上传与轮询
+│   │   ├── character_view.py        角色审查视图 /detail + /view
+│   │   ├── level_view.py            关卡审查视图 /detail + /view（叠画平台/出生点/终点/告警）
+│   │   ├── errors.py                中文错误体：角色扁平体 / 关卡信封体 / 框架级双键体
+│   │   ├── urls.py                  站内相对路径 → 完整地址（PUBLIC_BASE_URL 优先）
+│   │   └── review_html.py           两个审查页共用的样式与拼装函数
 │   ├── services/
 │   │   ├── annotations.py           ① vendor 包装层：异常 → NeedsCorrection
 │   │   ├── annotation_repair.py     ①.5 扩框重裁 + mask 重建 + 关节吸附 + 门禁 + 网格降级阶梯
@@ -174,7 +182,8 @@ jjhks/
 ├── requirements-service.txt         镜像内运行时依赖（vendor 子集，不含 torch，省 ~800MB）
 ├── requirements-dev.txt             宿主开发/测试依赖
 ├── vendor/                          AnimatedDrawings 源码（.gitignore，由 setup-vendor.sh 拉取）
-└── out/                             产物与中间文件（.gitignore）：jobs/ spike/ mesa-spike/ ...
+└── out/                             产物与中间文件（.gitignore）：jobs/ logs/ spike/ mesa-spike/ ...
+    └── logs/                        中文日志，按组件与日期拆分：api-2026-09-10.log、level-worker-…
 ```
 
 标 ★ 的是最该先读的文件。
@@ -191,7 +200,7 @@ jjhks/
 |---|---|---|---|---|
 | `ad-torchserve` | `paper-game/ad-torchserve:local` | 8080 推理 / 8081 管理 | 涂鸦检测、分割、骨架估计 | 内存上限 16GB；python urllib 探活，`start_period: 60s`（模型加载慢） |
 | `pg-redis` | `redis:7-alpine` | — | 队列 + 任务状态 | `redis-cli ping` 健康检查 |
-| `pg-api` | `paper-game/server:local` | 8000 | 上传、轮询、静态伺服产物 | `uvicorn app.main:app`；卷 `./out → /data/out` |
+| `pg-api` | `paper-game/server:local` | 8000 | 上传、轮询、静态伺服产物、审查页 | `uvicorn app.main:app`；卷 `./out → /data/out`；`PUBLIC_BASE_URL` / `CORS_*` / `LOG_*` |
 | `pg-worker` | 同 api 镜像 | — | 消费队列、子进程渲染 | `RENDER_USE_MESA=true`；`stop_grace_period: 300s`（≥120s×2 次尝试，防 docker 默认 10s SIGKILL 打断渲染） |
 
 api 与 worker **分开部署**：故障域隔离、可独立 restart、可 `--scale worker=N` 伸缩；共享镜像使边际成本仅一份基础运行时内存。
@@ -252,20 +261,31 @@ out/jobs/{levelJobId}/
 
 ```http
 POST /v1/characters            multipart 字段名 "file"，仅 PNG/JPEG，≤10MB
-  202 {"jobId": "char_<sha256(content) 前 12 位>"}
-  400 {"code": "FILE_TOO_LARGE" | "NOT_AN_IMAGE" | "UNSUPPORTED_FORMAT"}
-  503 {"code": "QUEUE_UNAVAILABLE"}
+  202 {"jobId": "char_<sha256(content) 前 12 位>", "statusUrl": "http://…", "viewUrl": "http://…"}
+  400 {"code": "FILE_TOO_LARGE" | "NOT_AN_IMAGE" | "UNSUPPORTED_FORMAT", "message": "中文原因"}
+  503 {"code": "QUEUE_UNAVAILABLE", "message": "中文原因"}
 
 GET /v1/characters/{jobId}
-  200 {"status": "...", ...终态附带字段, "updatedAt": "..."}
-  404 {"code": "JOB_NOT_FOUND"}
+  200 {"status": "...", "message": "中文状态/原因", ...终态附带字段, "statusUrl", "viewUrl", "updatedAt": "..."}
+  404 {"code": "JOB_NOT_FOUND", "message": "中文原因"}
 
 GET /v1/characters/{jobId}/detail   审查用：原图/GIF/标注/精灵表的全部 URL 与元数据（非契约，字段可变）
 GET /v1/characters/{jobId}/view     同一份信息的单页 HTML，浏览器直开即可目视验收
 
+POST /v1/levels                multipart：file + schemaVersion + 可选 playabilityProfile，?force=true 强制重跑
+GET /v1/levels/{jobId}         queued/processing 带中文阶段名，终态返回契约信封
+GET /v1/levels/{jobId}/detail  审查用：关卡图/识别几何/可玩性分析/全部产物地址（非契约）
+GET /v1/levels/{jobId}/view    单页 HTML 预览：拉正图上叠画平台/出生点/终点/告警
+
 GET /artifacts/{jobId}/{path}   StaticFiles 挂载 ./out/jobs
 GET /healthz                    {"status": "ok"}
 ```
+
+三条横向约定（详见 [`API.md`](API.md) 第 9 节）：
+
+- **跨域**：已挂 `CORSMiddleware`，默认允许所有来源；`CORS_ALLOW_ORIGINS` / `CORS_ALLOW_METHODS` / `CORS_ALLOW_HEADERS` / `CORS_ALLOW_CREDENTIALS` / `CORS_MAX_AGE` 可调。来源为 `*` 时凭证自动关闭（浏览器规范所限）。
+- **完整地址**：所有 `*Url` 都是含 scheme+host 的完整地址，直接请求即可；基址取 `PUBLIC_BASE_URL`，未配置时按请求 Host 推导。磁盘产物内部仍存相对路径，只在响应出口补全。
+- **中文日志**：全链路中文，同时写控制台与 `out/logs/<组件>-<日期>.log`（按天拆分，跳天自动切新文件）；`LOG_LEVEL` 调级别，`LOG_KEEP_DAYS>0` 才清理旧日志。排查单个任务：`grep <jobId> out/logs/*.log`。
 
 关卡上传与轮询示例（`playabilityProfile` 省略时使用服务端默认值）：
 
@@ -274,10 +294,11 @@ curl -sS -X POST http://localhost:8000/v1/levels \
   -F schemaVersion=1.0 \
   -F 'playabilityProfile={"profileVersion":"unity-c1-test-1","maxJumpRisePixels":150,"maxJumpDistancePixels":230,"characterWidthPixels":32,"characterHeightPixels":58,"landingTolerancePixels":6}' \
   -F file=@../testdata/levels/synthetic/front.png
-# 202 {"jobId":"level_...","status":"queued","statusUrl":"/v1/levels/level_...","createdAt":"..."}
+# 202 {"jobId":"level_...","status":"queued","message":"排队中…","statusUrl":"http://localhost:8000/v1/levels/level_...","viewUrl":"http://…/view","createdAt":"..."}
 
 curl -sS http://localhost:8000/v1/levels/level_...
-# queued/processing，或 ready/needs_fix/needs_review/failed 终态信封
+# queued/processing（带中文阶段名），或 ready/needs_fix/needs_review/failed 终态信封
+open http://localhost:8000/v1/levels/level_.../view      # 浏览器预览识别结果
 ```
 
 关卡任务由独立 `level-worker` 消费 `pq:levels`。全栈现为 5 容器：`torchserve`、`redis`、`api`、`worker`、`level-worker`；关卡实机验收运行 `bash scripts/smoke/smoke_levels_e2e.sh`，成功标记为 `SMOKE_LEVELS_E2E_PASS`。可选 LLM 复核仅在同时配置 `LEVEL_LLM_BASE_URL`（必须 HTTPS）、`LEVEL_LLM_API_KEY`、`LEVEL_LLM_MODEL` 时启用；缺失、配置错误、请求失败或响应无效时无损降级为纯 OpenCV，LLM 和可玩性分析都不能创建、移动或延长平台坐标。
@@ -293,21 +314,24 @@ Level v1 已知边界：只支持单张横版纸、近水平直平台和单一�
 下例取自真实冒烟结果（`jobId=char_9c3ff81ce4ea`，样本 `s01.png`）：
 
 ```jsonc
+// 所有状态都额外带："message"（中文说明）、"statusUrl" / "viewUrl"（完整地址）
 // ready：animations 必须恰好含 run 与 jump，两者帧尺寸相等
-{"status":"ready","characterId":"char_9c3ff81ce4ea",
+{"status":"ready","message":"渲染完成，可按 spriteSheetUrl 下载精灵表。","characterId":"char_9c3ff81ce4ea",
  "animations":{
-   "run": {"spriteSheetUrl":"/artifacts/char_9c3ff81ce4ea/run.png","frameCount":10,"fps":15,
+   "run": {"spriteSheetUrl":"http://localhost:8000/artifacts/char_9c3ff81ce4ea/run.png","frameCount":10,"fps":15,
            "frameWidth":241,"frameHeight":275,"footAnchor":{"x":120,"y":275}},
-   "jump":{"spriteSheetUrl":"/artifacts/char_9c3ff81ce4ea/jump.png","frameCount":7,"fps":15,
+   "jump":{"spriteSheetUrl":"http://localhost:8000/artifacts/char_9c3ff81ce4ea/jump.png","frameCount":7,"fps":15,
            "frameWidth":241,"frameHeight":275,"footAnchor":{"x":120,"y":275}}}}
 
-// needs_correction：附 mask 与关节编辑数据，供 Unity「骨架点确认」页
+// needs_correction：附 mask 与关节编辑数据，供 Unity「骨架点确认」页；message 可直接上屏
 {"status":"needs_correction","reason":"NO_HUMANOID",
- "maskUrl":"/artifacts/char_xxx/anno/mask.png",
+ "message":"画面里没有找到人形，请只画一个完整的火柴人后重传。",
+ "maskUrl":"http://localhost:8000/artifacts/char_xxx/anno/mask.png",
  "joints":[{"name":"root","loc":[120,340],"parent":null}]}
 
-// failed：稳定错误码
-{"status":"failed","code":"RENDER_TIMEOUT"|"RENDER_CRASHED"|"ASSET_MISSING"|"INTERNAL"}
+// failed：稳定错误码 + 中文原因
+{"status":"failed","code":"RENDER_TIMEOUT"|"RENDER_CRASHED"|"ASSET_MISSING"|"INTERNAL",
+ "message":"单次渲染超过 120 秒，自动重试后仍失败，请重试或简化画面。"}
 ```
 
 两个动作的 `frameWidth`/`frameHeight` **完全相等**（239×339）——这是 `render_character()` 取「所有动作全部帧内容包围盒的并集」作为统一帧尺寸的结果，Unity 因此能用同一套切帧参数播放 run 与 jump。反算可验证：`13 × 239 = 3107`、`12 × 239 = 2868`，与冒烟时下载到的精灵表实际像素宽逐字吻合。`footAnchor` 恒为 `(frameWidth // 2, frameHeight)`，即帧内水平居中、垂直贴底，供 Unity 落地对齐。
@@ -320,6 +344,7 @@ Level v1 已知边界：只支持单张横版纸、近水平直平台和单一�
 - `ErrorCode`：`FILE_TOO_LARGE` `NOT_AN_IMAGE` `UNSUPPORTED_FORMAT` `JOB_NOT_FOUND` `QUEUE_UNAVAILABLE` `RENDER_TIMEOUT` `RENDER_CRASHED` `ASSET_MISSING` `INTERNAL`
 - `CorrectionReason`：`NO_HUMANOID` `NO_SKELETON` `MULTIPLE_SKELETONS` `NO_CONTOUR` `SKELETON_MISFIT` `ANALYZE_FAILED`
 - 关卡任务态：`queued` `processing` `ready` `needs_fix` `needs_review` `failed`；可玩性结论为 `playable` `unreachable` `uncertain`，唯一真源是 `app/level_contracts.py`。
+- 中文文案表（与上述枚举一一对应，新增码必须同步补文案，已有测试卡住）：`contracts.ERROR_MESSAGES` / `REASON_MESSAGES` / `STATUS_MESSAGES`，`level_contracts.LEVEL_ERROR_MESSAGES` / `LEVEL_STATUS_MESSAGES` / `LEVEL_STAGE_MESSAGES`。
 
 Unity 侧 `GameContracts.cs` 将来照 `contracts.py` 逐字镜像，客户端禁止使用匿名 JSON。
 

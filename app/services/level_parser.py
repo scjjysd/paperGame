@@ -1,6 +1,7 @@
 """编排关卡识别、几何门禁、可玩性分析与权威产物发布。"""
 import hashlib
 import json
+import logging
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
@@ -11,6 +12,8 @@ from pydantic import ValidationError
 from app.level_contracts import (ALGORITHM_VERSION, DEFAULT_PLAYABILITY_PROFILE,
                                  Level, PlayabilityProfile, SCHEMA_VERSION)
 from app.services import level_detect, level_rectify, level_semantic, playability
+
+logger = logging.getLogger(__name__)
 
 # 合成集和黄金样本的候选置信度均高于 0.65；接入真实拍照集后需重标定。
 MIN_PUBLISH_CONFIDENCE = .65
@@ -55,6 +58,16 @@ def _stage(progress: Progress, name: str) -> None:
         progress(name)
 
 
+def _pixels_hint(warning: Any) -> str:
+    """告警的像素数值是可选的（如 GOAL_NOT_SUPPORTED 根本没有），缺失时别打出「需要 None 像素」。"""
+    required, available = warning.requiredValuePixels, warning.availableValuePixels
+    if required is None and available is None:
+        return ''
+    return '，需要 {} 像素，实际 {} 像素'.format(
+        '未知' if required is None else required,
+        '未知' if available is None else available)
+
+
 def _artifact_url(job_id: str, name: str) -> str:
     return '/artifacts/{}/{}'.format(job_id, name)
 
@@ -81,6 +94,9 @@ def _candidate_region(candidate: Dict[str, Any], width: int, height: int) -> Dic
 def _review_payload(job_dir: Path, reason: str, candidates: Sequence[Any],
                     width: int, height: int, created: str, updated: str) -> Dict[str, Any]:
     job_id = job_dir.name
+    # 复核是业务终态而非故障，但“为何没解析出来”全靠这条日志定位
+    logger.info('关卡任务 %s 判定为需人工复核：%s（%s），候选 %d 个，画布 %dx%d',
+                job_id, reason, REVIEW_MESSAGES[reason], len(candidates), width, height)
     items = []
     for index, candidate in enumerate(candidates):
         raw = candidate if isinstance(candidate, dict) else {}
@@ -171,7 +187,7 @@ def _goal_region(goal: Any) -> Dict[str, Any]:
 def _overlay(path: Path, level: Level, analysis: Any) -> None:
     image = cv2.imread(str(path), cv2.IMREAD_COLOR)
     if image is None:
-        raise ValueError('cannot read rectified image')
+        raise ValueError('无法读取拉正图：{}'.format(path))
     for platform in level.platforms:
         color = (0, 180, 0) if platform.id in analysis.path else (255, 120, 0)
         cv2.line(image, (platform.start.x, platform.start.y),
@@ -184,7 +200,7 @@ def _overlay(path: Path, level: Level, analysis: Any) -> None:
                   (goal.x + goal.width - 1, goal.y + goal.height - 1), (0, 0, 255), 1)
     temporary = path.parent / 'overlay.png.tmp.png'
     if not cv2.imwrite(str(temporary), image):
-        raise OSError('cannot write overlay')
+        raise OSError('无法写入识别叠加图：{}'.format(temporary))
     temporary.replace(path.parent / 'overlay.png')
 
 
@@ -195,7 +211,7 @@ def _publish_review_artifacts(job_dir: Path, reason: str, candidates: Sequence[A
         level_path.unlink()
     image = cv2.imread(str(rectified_path), cv2.IMREAD_COLOR)
     if image is None:
-        raise ValueError('cannot read rectified image')
+        raise ValueError('无法读取拉正图：{}'.format(rectified_path))
     for candidate in candidates:
         if hasattr(candidate, 'region'):
             region = candidate.region
@@ -209,7 +225,7 @@ def _publish_review_artifacts(job_dir: Path, reason: str, candidates: Sequence[A
                      (candidate.end.x, candidate.end.y), (255, 120, 0), 1)
     temporary = job_dir / 'overlay.png.tmp.png'
     if not cv2.imwrite(str(temporary), image):
-        raise OSError('cannot write review overlay')
+        raise OSError('无法写入复核叠加图：{}'.format(temporary))
     temporary.replace(job_dir / 'overlay.png')
     analysis = {'algorithmVersion': ALGORITHM_VERSION, 'reviewReason': reason}
     _stage(progress, 'publishing_artifacts')
@@ -238,14 +254,17 @@ def parse(job_dir: Path, progress: Progress = None,
     job_dir = Path(job_dir).resolve()
     job_id = job_dir.name
     profile, created, updated = _request(job_dir)
+    logger.info('关卡任务 %s 开始解析：能力配置 %s，输入 %s', job_id,
+                profile.profileVersion, job_dir / 'input.png')
     _stage(progress, 'validating_upload')
     input_path = job_dir / 'input.png'
     if not input_path.exists():
-        raise FileNotFoundError(input_path)
+        raise FileNotFoundError('关卡任务 {} 缺少上传原图：{}'.format(job_id, input_path))
     _stage(progress, 'rectifying_paper')
     try:
         rectified = level_rectify.rectify(input_path, job_dir)
     except level_rectify.RectifyIssue as issue:
+        logger.warning('关卡任务 %s 纸张拉正失败：%s（%s）', job_id, issue.reason, issue)
         review_image = job_dir / 'rectified.png'
         if not review_image.exists():
             _atomic_bytes(review_image, input_path.read_bytes())
@@ -254,12 +273,16 @@ def parse(job_dir: Path, progress: Progress = None,
         height, width = image.shape[:2]
         return _review_payload(job_dir, issue.reason, issue.candidates,
                                width, height, created, updated)
+    logger.info('关卡任务 %s 纸张拉正完成：画布 %dx%d', job_id, rectified.width, rectified.height)
     _stage(progress, 'detecting_platforms')
     detection = level_detect.detect(rectified.rectified_path, job_dir)
     _stage(progress, 'detecting_goal')
     _stage(progress, 'semantic_review')
     semantic = level_semantic.review(rectified.rectified_path, detection,
                                      client=semantic_client)
+    logger.info('关卡任务 %s 语义复核完成：来源 %s，保留平台 %d 条、终点 %d 个，复核标记 %s',
+                job_id, semantic.source, len(semantic.platforms), len(semantic.goals),
+                '、'.join(semantic.review_reasons) or '无')
     reason = _pre_review(semantic)
     if reason:
         candidates = semantic.goals if reason in ('GOAL_NOT_FOUND', 'AMBIGUOUS_GOAL') else semantic.platforms
@@ -267,13 +290,21 @@ def parse(job_dir: Path, progress: Progress = None,
         return _review_payload(job_dir, reason, candidates, rectified.width, rectified.height, created, updated)
     _stage(progress, 'validating_geometry')
     ink = cv2.imread(str(detection.ink_mask_path), cv2.IMREAD_GRAYSCALE)
-    if ink is None or any(_coverage(ink, platform) < MIN_INK_COVERAGE for platform in semantic.platforms) or _duplicate(semantic.platforms):
+    # 拆开算一遍才能把“到底卡在哪个门禁”写进日志；短路顺序与原判定一致
+    weak = [platform.id for platform in semantic.platforms
+            if ink is None or _coverage(ink, platform) < MIN_INK_COVERAGE]
+    duplicated = _duplicate(semantic.platforms)
+    if ink is None or weak or duplicated:
+        logger.warning('关卡任务 %s 几何门禁未通过：墨迹证据不足的平台 %s，存在重复平台 %s，墨迹遮罩可读 %s',
+                       job_id, '、'.join(weak) or '无', duplicated, ink is not None)
         _publish_review_artifacts(job_dir, 'PLATFORM_GEOMETRY_AMBIGUOUS', semantic.platforms,
                                   rectified.rectified_path, progress)
         return _review_payload(job_dir, 'PLATFORM_GEOMETRY_AMBIGUOUS', semantic.platforms,
                                rectified.width, rectified.height, created, updated)
     start = _start(semantic.platforms, profile, rectified.height)
     if start is None:
+        logger.warning('关卡任务 %s 找不到可承载角色的出生平台（画布高 %d，角色宽 %d）',
+                       job_id, rectified.height, profile.characterWidthPixels)
         _publish_review_artifacts(job_dir, 'START_PLATFORM_NOT_FOUND', semantic.platforms,
                                   rectified.rectified_path, progress)
         return _review_payload(job_dir, 'START_PLATFORM_NOT_FOUND', semantic.platforms,
@@ -291,7 +322,9 @@ def parse(job_dir: Path, progress: Progress = None,
                   'goalRegion': _goal_region(max(semantic.goals, key=lambda goal: (goal.confidence, goal.id)))}
     try:
         level = Level.model_validate(level_data)
-    except ValidationError:
+    except ValidationError as exc:
+        # 契约校验失败原本被静默吞掉，只能看到“转复核”，排查时无从下手
+        logger.warning('关卡任务 %s 几何不符合契约，转人工复核：%s', job_id, exc)
         _publish_review_artifacts(job_dir, 'PLATFORM_GEOMETRY_AMBIGUOUS', semantic.platforms,
                                   rectified.rectified_path, progress)
         return _review_payload(job_dir, 'PLATFORM_GEOMETRY_AMBIGUOUS', semantic.platforms,
@@ -307,8 +340,16 @@ def parse(job_dir: Path, progress: Progress = None,
                  'overlayImageUrl': _artifact_url(job_id, 'overlay.png'),
                  'levelJsonUrl': _artifact_url(job_id, 'level.json'),
                  'analysisJsonUrl': _artifact_url(job_id, 'analysis.json')}
+    status = 'ready' if analysis.playability == 'playable' else 'needs_fix'
+    logger.info('关卡任务 %s 解析完成：%s，%d 块平台，可玩性 %s，告警 %d 条',
+                job_id, status, len(level.platforms), analysis.playability, len(analysis.warnings))
+    for warning in analysis.warnings:
+        logger.warning('关卡任务 %s 可玩性告警 [%s] %s（相关平台 %s%s）',
+                       job_id, warning.code, warning.message,
+                       '、'.join(warning.relatedPlatformIds) or '无',
+                       _pixels_hint(warning))
     return {'jobId': job_id, 'schemaVersion': SCHEMA_VERSION,
             'algorithmVersion': ALGORITHM_VERSION, 'createdAt': created, 'updatedAt': updated,
-            'status': 'ready' if analysis.playability == 'playable' else 'needs_fix',
+            'status': status,
             'result': {'level': level.model_dump(), 'analysis': analysis.model_dump(),
                        'artifacts': artifacts}}

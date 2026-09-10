@@ -2,13 +2,20 @@
 
 退出码协议：0 = 业务终态已写入 result.json（ready/needs_correction/failed:ASSET_MISSING）；
 非 0 = 基础设施故障（由主循环重试）。chdir 污染与 GLFW 崩溃被隔离在本子进程内。
+
+日志写 out/logs/render-runner-<日期>.log：本进程可能被并发的 worker 反复拉起，
+与 worker 日志分开才好按任务对齐时间线。
 """
 import json
+import logging
 import shutil
 import sys
-import traceback
 from pathlib import Path
 
+from app import contracts
+from app.log import out_root_for_job_dir, setup_logging
+
+logger = logging.getLogger(__name__)
 SERVER_DIR = Path(__file__).resolve().parents[2]
 MOTIONS = ('run', 'jump')
 
@@ -44,29 +51,41 @@ def _load_joints(char_cfg: Path):
 
 
 def run(job_dir: Path) -> int:
+    job_dir = Path(job_dir)
     job_id = job_dir.name
+    setup_logging('render-runner', out_root_for_job_dir(job_dir))
     from app.services.annotations import NeedsCorrection
     from app.services.character_pipeline import CharacterPipeline
 
+    logger.info('角色任务 %s 开始渲染，输入 %s，动作 %s', job_id, job_dir / 'input.png', '/'.join(MOTIONS))
     pipeline = CharacterPipeline(job_dir / 'work')
     try:
         result = pipeline.render_character(job_dir / 'input.png')
     except NeedsCorrection as e:
         relocate_artifacts(job_dir)
+        logger.warning('角色任务 %s 需要用户修正（%s）：%s', job_id, e.reason,
+                       contracts.REASON_MESSAGES.get(e.reason, e.detail))
         payload = {'status': 'needs_correction', 'reason': e.reason,
                    'maskUrl': f'/artifacts/{job_id}/anno/mask.png',
                    'joints': _load_joints(job_dir / 'anno' / 'char_cfg.yaml')}
     except FileNotFoundError as e:
+        logger.error('角色任务 %s 渲染依赖的资产缺失：%s', job_id, e)
         payload = {'status': 'failed', 'code': 'ASSET_MISSING'}
     except Exception:
-        traceback.print_exc()
+        logger.exception('角色任务 %s 渲染出现未处理异常，交回主循环按基础设施故障重试', job_id)
         return 2
     else:
         relocate_artifacts(job_dir)
         animations = {m: {**result['animations'][m],
                           'spriteSheetUrl': f'/artifacts/{job_id}/{m}.png'} for m in MOTIONS}
+        logger.info('角色任务 %s 渲染成功：%s', job_id,
+                    '，'.join('{} {} 帧 {}x{}'.format(m, animations[m]['frameCount'],
+                                                     animations[m]['frameWidth'],
+                                                     animations[m]['frameHeight'])
+                             for m in MOTIONS))
         payload = {'status': 'ready', 'characterId': job_id, 'animations': animations}
 
+    # result.json 里只存稳定错误码与相对路径：中文原因与完整地址由 API 在响应出口补
     (job_dir / 'result.json').write_text(json.dumps(payload, ensure_ascii=False))
     return 0
 

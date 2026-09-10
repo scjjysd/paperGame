@@ -8,6 +8,9 @@ API="${API_BASE:-http://localhost:8000}"
 SAMPLE="${1:-testdata/characters/s01.png}"   # s01 与官方示例 garlic.png 内容相同（MD5 一致）
 TIMEOUT_SEC=180
 
+# 响应里的 *Url 现在是完整地址；仍兼容旧服务端的站内相对路径
+resolve_url() { case "$1" in http://*|https://*) printf '%s' "$1" ;; *) printf '%s' "$API$1" ;; esac; }
+
 echo "== 健康检查 =="
 curl -sf "$API/healthz" > /dev/null
 curl -sf http://localhost:8080/ping > /dev/null
@@ -34,7 +37,7 @@ done
 echo "== 下载精灵表并验证 PNG =="
 for M in run jump; do
   URL=$(echo "$BODY" | python3 -c "import sys,json; print(json.load(sys.stdin)['animations']['$M']['spriteSheetUrl'])")
-  curl -sf "$API$URL" -o "/tmp/smoke_$M.png"
+  curl -sf "$(resolve_url "$URL")" -o "/tmp/smoke_$M.png"
   python3 -c "
 from PIL import Image
 im = Image.open('/tmp/smoke_$M.png')
@@ -42,6 +45,10 @@ assert im.mode == 'RGBA', im.mode
 print('$M sheet:', im.size, im.mode)
 "
 done
+
+echo "== 审查页可打开 =="
+VIEW_URL=$(echo "$BODY" | python3 -c 'import sys,json; print(json.load(sys.stdin)["viewUrl"])')
+curl -sf "$(resolve_url "$VIEW_URL")" | grep -q '角色审查' || { echo "FAIL: 审查页不可用 $VIEW_URL"; exit 1; }
 
 echo "== 幂等验证：同图重复提交 =="
 JOB_ID2=$(curl -sf -F "file=@$SAMPLE" "$API/v1/characters" | python3 -c 'import sys,json; print(json.load(sys.stdin)["jobId"])')

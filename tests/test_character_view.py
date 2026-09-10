@@ -7,7 +7,10 @@ import yaml
 from fastapi.testclient import TestClient
 
 from app.api.character_view import build_detail_html, collect_detail
+from app.contracts import ERROR_MESSAGES
 from app.services.job_store import JobStore
+
+BASE = 'http://testserver'
 
 READY_RESULT = {
     'status': 'ready',
@@ -157,15 +160,35 @@ def _seed(tmp_path, job_id='char_t'):
 def test_detail_endpoint_returns_all_artifact_urls(client, tmp_path):
     _seed(tmp_path)
     body = client.get('/v1/characters/char_t/detail').json()
-    assert body['inputUrl'] == '/artifacts/char_t/input.png'
-    assert body['animations']['run']['gifUrl'] == '/artifacts/char_t/run.gif'
+    # 端点给完整地址，浏览器里直接可点
+    assert body['inputUrl'] == f'{BASE}/artifacts/char_t/input.png'
+    assert body['animations']['run']['gifUrl'] == f'{BASE}/artifacts/char_t/run.gif'
+    assert body['viewUrl'] == f'{BASE}/v1/characters/char_t/view'
     assert len(body['annotation']['joints']) == len(CHAR_CFG['skeleton'])
+
+
+def test_detail_without_base_url_keeps_relative_paths(ready_job):
+    """collect_detail 不传 base_url 时保持相对路径：离线自检与历史调用方不受影响。"""
+    detail = collect_detail('char_t', ready_job, 'ready', READY_RESULT)
+    assert detail['inputUrl'] == '/artifacts/char_t/input.png'
+    detail = collect_detail('char_t', ready_job, 'ready', READY_RESULT, 'https://cdn.example')
+    assert detail['inputUrl'] == 'https://cdn.example/artifacts/char_t/input.png'
+
+
+def test_detail_carries_chinese_reason(tmp_path):
+    """审查页要直接把中文原因展给人看，不能只给错误码。"""
+    d = tmp_path / 'char_e'
+    d.mkdir()
+    detail = collect_detail('char_e', d, 'needs_correction',
+                            {'status': 'needs_correction', 'reason': 'NO_HUMANOID', 'joints': []})
+    assert detail['message']
+    assert '人形' in detail['message']
 
 
 def test_detail_unknown_job_is_404(client):
     resp = client.get('/v1/characters/char_nope/detail')
     assert resp.status_code == 404
-    assert resp.json() == {'code': 'JOB_NOT_FOUND'}
+    assert resp.json() == {'code': 'JOB_NOT_FOUND', 'message': ERROR_MESSAGES['JOB_NOT_FOUND']}
 
 
 def test_view_endpoint_serves_html(client, tmp_path):
@@ -174,16 +197,23 @@ def test_view_endpoint_serves_html(client, tmp_path):
     assert resp.status_code == 200
     assert resp.headers['content-type'].startswith('text/html')
     assert 'steps(10)' in resp.text
+    # 页面里的产物链接也是完整地址，拷到别的机器上打开照样能看图
+    assert f'{BASE}/artifacts/char_t/run.png' in resp.text
 
 
 def test_view_unknown_job_is_404(client):
     resp = client.get('/v1/characters/char_nope/view')
     assert resp.status_code == 404
     # 断言错误体而非只看状态码：路由不存在时也是 404，只看码就是个永远通不了假的测试
-    assert resp.json() == {'code': 'JOB_NOT_FOUND'}
+    assert resp.json() == {'code': 'JOB_NOT_FOUND', 'message': ERROR_MESSAGES['JOB_NOT_FOUND']}
 
 
 def test_contract_endpoint_stays_unpolluted(client, tmp_path):
-    """/v1/characters/{id} 是 Unity 契约，新端点不得往它的响应里掺任何审查字段。"""
+    """/v1/characters/{id} 是 Unity 契约：只能多出中文说明与完整地址，不得掺审查字段。"""
     _seed(tmp_path)
-    assert client.get('/v1/characters/char_t').json() == READY_RESULT
+    body = client.get('/v1/characters/char_t').json()
+    assert body['characterId'] == 'char_t'
+    assert body['animations']['run']['spriteSheetUrl'] == f'{BASE}/artifacts/char_t/run.png'
+    assert body['animations']['run']['frameCount'] == READY_RESULT['animations']['run']['frameCount']
+    for review_only in ('annotation', 'inputUrl', 'renderedAt', 'detailUrl'):
+        assert review_only not in body

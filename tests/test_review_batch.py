@@ -1,5 +1,5 @@
 """review_batch 汇总页自检：纯字符串生成，离线可跑（无需 TorchServe / OpenGL）。"""
-from scripts.review_batch import build_html
+from scripts.diag.review_batch import build_html
 
 READY = {
     'name': 's01',

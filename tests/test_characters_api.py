@@ -4,8 +4,10 @@ import fakeredis
 import pytest
 from fastapi.testclient import TestClient
 
-from app.contracts import derive_job_id
+from app.contracts import ERROR_MESSAGES, REASON_MESSAGES, STATUS_MESSAGES, derive_job_id
 from app.services.job_store import JobStore
+
+BASE = 'http://testserver'
 
 PNG_1PX = bytes.fromhex(
     '89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4'
@@ -42,10 +44,14 @@ def test_upload_valid_returns_202_and_enqueues(client, tmp_path):
     assert resp.status_code == 202
     job_id = resp.json()['jobId']
     assert job_id == derive_job_id(PNG_1PX)
+    # 入队响应直接给完整地址，客户端与浏览器都不必再拼 Base URL
+    assert resp.json()['statusUrl'] == f'{BASE}/v1/characters/{job_id}'
+    assert resp.json()['viewUrl'] == f'{BASE}/v1/characters/{job_id}/view'
     assert (tmp_path / 'jobs' / job_id / 'input.png').read_bytes() == PNG_1PX
     assert client.app.state.store.r.llen('pq:characters') == 1
     status = client.get(f'/v1/characters/{job_id}').json()
     assert status['status'] == 'queued'
+    assert status['message'] == STATUS_MESSAGES['queued']
 
 
 def test_upload_idempotent_no_double_enqueue(client):
@@ -89,24 +95,28 @@ def test_upload_too_large(client):
     resp = _upload(client, b'\x89PNG' + b'x' * (10 * 1024 * 1024))
     assert resp.status_code == 400
     assert resp.json()['code'] == 'FILE_TOO_LARGE'
+    assert resp.json()['message'] == ERROR_MESSAGES['FILE_TOO_LARGE']
 
 
 def test_upload_not_an_image(client):
     resp = _upload(client, b'hello world')
     assert resp.status_code == 400
     assert resp.json()['code'] == 'NOT_AN_IMAGE'
+    assert resp.json()['message'] == ERROR_MESSAGES['NOT_AN_IMAGE']
 
 
 def test_upload_unsupported_format_gif(client):
     resp = _upload(client, b'GIF89a....')
     assert resp.status_code == 400
     assert resp.json()['code'] == 'UNSUPPORTED_FORMAT'
+    assert resp.json()['message'] == ERROR_MESSAGES['UNSUPPORTED_FORMAT']
 
 
 def test_get_unknown_job_404(client):
     resp = client.get('/v1/characters/char_nope')
     assert resp.status_code == 404
     assert resp.json()['code'] == 'JOB_NOT_FOUND'
+    assert resp.json()['message'] == ERROR_MESSAGES['JOB_NOT_FOUND']
 
 
 def test_get_ready_returns_full_contract(client, tmp_path):
@@ -118,9 +128,16 @@ def test_get_ready_returns_full_contract(client, tmp_path):
         'jump': {'spriteSheetUrl': f'/artifacts/{job_id}/jump.png', 'frameCount': 12, 'fps': 12,
                  'frameWidth': 481, 'frameHeight': 655, 'footAnchor': {'x': 240, 'y': 655}}}}
     store.set_status(job_id, 'ready', result=payload)
-    resp = client.get(f'/v1/characters/{job_id}')
-    assert resp.status_code == 200
-    assert resp.json() == payload
+    body = client.get(f'/v1/characters/{job_id}').json()
+    assert body['status'] == 'ready'
+    assert body['characterId'] == job_id
+    assert body['message'] == STATUS_MESSAGES['ready']
+    # 存储里的终态载荷仍存相对路径，只有响应出口才补成完整地址
+    assert json.loads(store.get(job_id)['result']) == payload
+    for motion in ('run', 'jump'):
+        expected = payload['animations'][motion]
+        assert body['animations'][motion] == {
+            **expected, 'spriteSheetUrl': BASE + expected['spriteSheetUrl']}
 
 
 def test_get_needs_correction_shape(client):
@@ -131,7 +148,17 @@ def test_get_needs_correction_shape(client):
     client.app.state.store.set_status(job_id, 'needs_correction', result=payload)
     body = client.get(f'/v1/characters/{job_id}').json()
     assert body['reason'] == 'NO_HUMANOID'
+    assert body['message'] == REASON_MESSAGES['NO_HUMANOID']
+    assert body['maskUrl'] == f'{BASE}/artifacts/{job_id}/anno/mask.png'
     assert len(body['joints']) == 16
+
+
+def test_get_failed_carries_chinese_reason(client):
+    job_id = _upload(client, PNG_1PX).json()['jobId']
+    client.app.state.store.set_status(job_id, 'failed', result={'status': 'failed', 'code': 'RENDER_CRASHED'})
+    body = client.get(f'/v1/characters/{job_id}').json()
+    assert body['code'] == 'RENDER_CRASHED'
+    assert body['message'] == ERROR_MESSAGES['RENDER_CRASHED']
 
 
 def test_artifacts_static_serving(client, tmp_path):
@@ -162,5 +189,18 @@ def test_upload_redis_failure_returns_503(client, monkeypatch):
 
     monkeypatch.setattr(client.app.state.store, 'get', boom)
     resp = _upload(client, PNG_1PX)
+    assert resp.status_code == 503
+    assert resp.json()['code'] == 'QUEUE_UNAVAILABLE'
+    assert resp.json()['message'] == ERROR_MESSAGES['QUEUE_UNAVAILABLE']
+
+
+def test_get_redis_failure_returns_503(client, monkeypatch):
+    import redis.exceptions
+
+    def boom(job_id):
+        raise redis.exceptions.ConnectionError('redis down')
+
+    monkeypatch.setattr(client.app.state.store, 'get', boom)
+    resp = client.get('/v1/characters/char_x')
     assert resp.status_code == 503
     assert resp.json()['code'] == 'QUEUE_UNAVAILABLE'

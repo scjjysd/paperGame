@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -14,7 +15,15 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.services.level_detect import DetectionResult, GoalCandidate, PlatformCandidate
 
+logger = logging.getLogger(__name__)
 PROMPT_VERSION = 'level-semantic-16.3-v1'
+# 降级原因 -> 中文说明：LLM 不可用时链路仍能跑完，但不记日志就看不出结果为何变差
+DEGRADED_MESSAGES = {
+    'LLM_CONFIGURATION_INVALID': 'LEVEL_LLM_* 配置不合法（base_url 必须是 HTTPS）',
+    'LLM_IMAGE_UNAVAILABLE': '拉正图无法编码成 LLM 可用的图片',
+    'INVALID_LLM_RESPONSE': 'LLM 返回内容不符合结构化协议或没有覆盖全部候选',
+    'LLM_REQUEST_FAILED': 'LLM 请求失败（网络、鉴权或超时）',
+}
 PROMPT = """你是手绘横版平台关卡的候选分类器，不是关卡设计师。
 
 输入是一张已经完成透视拉正的纸张图片。图片上标出了 OpenCV 产生的候选编号。
@@ -76,7 +85,7 @@ class InvalidSemanticResponse(ValueError):
 class RequestsSemanticClient:
     def __init__(self, base_url: str, api_key: str, model: str):
         if not base_url.lower().startswith('https://'):
-            raise ValueError('LEVEL_LLM_BASE_URL must use HTTPS')
+            raise ValueError('LEVEL_LLM_BASE_URL 必须使用 HTTPS 地址')
         self.base_url = base_url.rstrip('/')
         self.api_key = api_key
         self.model = model
@@ -105,7 +114,7 @@ class RequestsSemanticClient:
             payload = response.json()
             return json.loads(payload['choices'][0]['message']['content'])
         except (json.JSONDecodeError, IndexError, KeyError, TypeError) as exc:
-            raise InvalidSemanticResponse('invalid structured LLM response') from exc
+            raise InvalidSemanticResponse('LLM 返回的不是可校验的结构化 JSON') from exc
 
 
 def _candidate_payload(detection: DetectionResult) -> Dict[str, Any]:
@@ -169,8 +178,9 @@ def _write_audit(path: Path, client: SemanticClient, candidate_ids: List[str],
         temporary = path.with_suffix(path.suffix + '.tmp')
         temporary.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True), encoding='utf-8')
         temporary.replace(path)
-    except Exception:
-        # 审计是旁路能力，序列化或磁盘故障不能改变关卡解析结果。
+    except Exception as exc:
+        # 审计是旁路能力，序列化或磁盘故障不能改变关卡解析结果，但必须留下痕迹
+        logger.warning('关卡语义复核审计写入失败：%s（%s）', path, exc)
         return
 
 
@@ -179,15 +189,23 @@ def _opencv_result(detection: DetectionResult, reason: Optional[str] = None) -> 
                           list(detection.goal_candidates), reason)
 
 
+def _degraded(detection: DetectionResult, reason: str) -> SemanticResult:
+    logger.warning('关卡语义复核降级为纯 OpenCV 结果：%s（%s）',
+                   reason, DEGRADED_MESSAGES.get(reason, ''))
+    return _opencv_result(detection, reason)
+
+
 def review(rectified_path: Path, detection: DetectionResult,
            client: Optional[SemanticClient] = None) -> SemanticResult:
     """复核候选 ID；模型的坐标字段和不存在的 ID 永远不会进入结果。"""
     if client is None:
         try:
             client = _configured_client()
-        except Exception:
-            return _opencv_result(detection, 'LLM_CONFIGURATION_INVALID')
+        except Exception as exc:
+            logger.warning('关卡语义复核客户端初始化失败：%s', exc)
+            return _degraded(detection, 'LLM_CONFIGURATION_INVALID')
     if client is None:
+        logger.info('未配置 LEVEL_LLM_*，关卡语义复核使用纯 OpenCV 结果')
         return _opencv_result(detection)
 
     candidates = _candidate_payload(detection)
@@ -198,15 +216,17 @@ def review(rectified_path: Path, detection: DetectionResult,
     image_data_uri = _image_data_uri(Path(rectified_path), detection)
     if not image_data_uri:
         _write_audit(audit_path, client, candidate_ids, response, 'LLM_IMAGE_UNAVAILABLE')
-        return _opencv_result(detection, 'LLM_IMAGE_UNAVAILABLE')
+        return _degraded(detection, 'LLM_IMAGE_UNAVAILABLE')
     try:
         response = client.classify(image_data_uri, candidates)
-    except InvalidSemanticResponse:
+    except InvalidSemanticResponse as exc:
+        logger.warning('关卡语义复核响应不合法：%s', exc)
         _write_audit(audit_path, client, candidate_ids, response, 'INVALID_LLM_RESPONSE')
-        return _opencv_result(detection, 'INVALID_LLM_RESPONSE')
-    except Exception:
+        return _degraded(detection, 'INVALID_LLM_RESPONSE')
+    except Exception as exc:
+        logger.warning('关卡语义复核请求失败：%s: %s', type(exc).__name__, exc)
         _write_audit(audit_path, client, candidate_ids, response, 'LLM_REQUEST_FAILED')
-        return _opencv_result(detection, 'LLM_REQUEST_FAILED')
+        return _degraded(detection, 'LLM_REQUEST_FAILED')
 
     try:
         parsed = _SemanticResponse.model_validate(response)
@@ -216,10 +236,12 @@ def review(rectified_path: Path, detection: DetectionResult,
         valid_goal_ids = {g.id for g in detection.goal_candidates}
         if (set(line_ids) != valid_line_ids or len(line_ids) != len(set(line_ids)) or
                 set(goal_ids) != valid_goal_ids or len(goal_ids) != len(set(goal_ids))):
-            raise ValueError('response must classify every candidate exactly once')
-    except (ValidationError, ValueError, TypeError):
+            raise ValueError('LLM 必须对每个候选恰好分类一次（平台 %s，终点 %s）'
+                             % (sorted(valid_line_ids), sorted(valid_goal_ids)))
+    except (ValidationError, ValueError, TypeError) as exc:
+        logger.warning('关卡语义复核结果不可用：%s', exc)
         _write_audit(audit_path, client, candidate_ids, response, 'INVALID_LLM_RESPONSE')
-        return _opencv_result(detection, 'INVALID_LLM_RESPONSE')
+        return _degraded(detection, 'INVALID_LLM_RESPONSE')
 
     selected_lines = {item.candidateId for item in parsed.lineClassifications
                       if item.label == 'platform'}
@@ -240,5 +262,10 @@ def review(rectified_path: Path, detection: DetectionResult,
         [g for g in detection.goal_candidates if g.id in selected_goals],
         review_reasons=review_reasons,
     )
+    logger.info('关卡语义复核采用 LLM 结果：模型 %s，保留平台 %d/%d 条、终点 %d/%d 个，复核标记 %s',
+                getattr(client, 'model', client.__class__.__name__),
+                len(result.platforms), len(detection.platform_candidates),
+                len(result.goals), len(detection.goal_candidates),
+                '、'.join(review_reasons) or '无')
     _write_audit(audit_path, client, candidate_ids, response, None)
     return result

@@ -10,8 +10,12 @@ from fastapi.testclient import TestClient
 from PIL import Image, ImageFile
 
 from app.api.levels import LEVEL_RERUN_ARTIFACTS
-from app.level_contracts import DEFAULT_PLAYABILITY_PROFILE, LevelNeedsFix, derive_level_job_id
+from app.api.urls import absolutize
+from app.level_contracts import (DEFAULT_PLAYABILITY_PROFILE, LEVEL_ERROR_MESSAGES,
+                                 LEVEL_STATUS_MESSAGES, LevelNeedsFix, derive_level_job_id)
 from app.services.job_store import JobStore
+
+BASE = 'http://testserver'
 
 
 @pytest.fixture
@@ -38,6 +42,14 @@ def image_bytes(size=(800, 800), fmt='PNG', **kwargs):
     return output.getvalue()
 
 
+def animated_png() -> bytes:
+    first = Image.new('RGBA', (800, 800), 'white')
+    second = Image.new('RGBA', (800, 800), 'black')
+    output = io.BytesIO()
+    first.save(output, format='PNG', save_all=True, append_images=[second], duration=10)
+    return output.getvalue()
+
+
 @pytest.fixture
 def png_800():
     return image_bytes()
@@ -59,7 +71,10 @@ def test_upload_valid_returns_202_and_enqueues(client, png_800):
     body = resp.json()
     assert body['jobId'].startswith('level_')
     assert body['status'] == 'queued'
-    assert body['statusUrl'] == f"/v1/levels/{body['jobId']}"
+    # 完整地址 + 中文状态说明：客户端不必拼 Base URL，也能直接看懂到哪一步了
+    assert body['statusUrl'] == f"{BASE}/v1/levels/{body['jobId']}"
+    assert body['viewUrl'] == f"{BASE}/v1/levels/{body['jobId']}/view"
+    assert body['message'] == LEVEL_STATUS_MESSAGES['queued']
     assert body['createdAt'].endswith('Z')
     assert client.app.state.level_store.r.llen('pq:levels') == 1
 
@@ -114,6 +129,38 @@ def test_same_image_same_profile_is_idempotent(client, png_800):
     second = upload(client, png_800, profile=profile).json()
     assert second['jobId'] == first['jobId']
     assert client.app.state.level_store.r.llen('pq:levels') == 1
+
+
+def test_idempotent_replay_after_redis_expiry_keeps_created_at(client, png_800):
+    """Redis TTL 过期后只剩磁盘快照，幂等返回也得带上真实创建时间。"""
+    profile = DEFAULT_PLAYABILITY_PROFILE.model_dump()
+    job_id = upload(client, png_800, profile=profile).json()['jobId']
+    snapshot = client.app.state.level_store.jobs_root / job_id / 'result.json'
+    snapshot.parent.mkdir(parents=True, exist_ok=True)
+    snapshot.write_text(json.dumps({'status': 'needs_fix',
+                                    'createdAt': '2026-09-10T10:26:24Z',
+                                    'updatedAt': '2026-09-10T10:26:25Z'}))
+    client.app.state.level_store.r.flushall()      # 模拟 24h TTL 到期
+
+    body = upload(client, png_800, profile=profile).json()
+
+    assert body['status'] == 'needs_fix'
+    assert body['createdAt'] == '2026-09-10T10:26:24Z'
+    assert client.app.state.level_store.r.llen('pq:levels') == 0   # 未重复入队
+
+
+def test_idempotent_replay_omits_missing_created_at(client, png_800):
+    """旧快照没有时间戳时宁可不给字段，也不要给 null 让强类型客户端反序列化失败。"""
+    profile = DEFAULT_PLAYABILITY_PROFILE.model_dump()
+    job_id = upload(client, png_800, profile=profile).json()['jobId']
+    snapshot = client.app.state.level_store.jobs_root / job_id / 'result.json'
+    snapshot.write_text(json.dumps({'status': 'needs_fix'}))
+    client.app.state.level_store.r.flushall()
+
+    body = upload(client, png_800, profile=profile).json()
+
+    assert 'createdAt' not in body
+    assert None not in body.values()
 
 
 def test_different_profile_changes_job_id(client, png_800):
@@ -177,6 +224,7 @@ def test_get_processing_includes_progress_stage(client, png_800):
     assert body['jobId'] == job_id
     assert body['status'] == 'processing'
     assert body['progress']['stage'] == 'detecting_platforms'
+    assert body['progress']['stageLabel'] == '识别平台'
     assert body['progress']['percent'] == 55
     assert 'createdAt' in body and 'updatedAt' in body
 
@@ -186,7 +234,31 @@ def test_get_terminal_returns_saved_envelope(client, png_800):
     envelope = json.loads((Path(__file__).parents[1] / 'testdata' / 'levels' / 'contracts' / 'needs-fix.json').read_text())
     envelope['jobId'] = job_id
     client.app.state.level_store.set_status(job_id, 'needs_fix', result=envelope)
-    assert client.get(f'/v1/levels/{job_id}').json() == LevelNeedsFix.model_validate(envelope).model_dump()
+
+    body = client.get(f'/v1/levels/{job_id}').json()
+
+    # 契约字段逐字保留，只在产物地址上补全基址，并多出中文说明与预览链接
+    expected = absolutize(LevelNeedsFix.model_validate(envelope).model_dump(), BASE)
+    assert body['result'] == expected['result']
+    assert body['schemaVersion'] == expected['schemaVersion']
+    assert body['algorithmVersion'] == expected['algorithmVersion']
+    assert body['createdAt'] == expected['createdAt']
+    assert body['status'] == 'needs_fix'
+    assert body['message'] == LEVEL_STATUS_MESSAGES['needs_fix']
+    assert body['statusUrl'] == f'{BASE}/v1/levels/{job_id}'
+    assert body['viewUrl'] == f'{BASE}/v1/levels/{job_id}/view'
+    assert body['result']['artifacts']['levelJsonUrl'].startswith(BASE + '/artifacts/')
+
+
+def test_stored_envelope_keeps_relative_urls(client, png_800):
+    """完整地址只在响应出口补：存储里写绝对地址会让历史任务跟着部署地址一起失效。"""
+    job_id = upload(client, png_800).json()['jobId']
+    envelope = json.loads((Path(__file__).parents[1] / 'testdata' / 'levels' / 'contracts' / 'ready.json').read_text())
+    envelope['jobId'] = job_id
+    store = client.app.state.level_store
+    store.set_status(job_id, 'ready', result=envelope)
+    client.get(f'/v1/levels/{job_id}')
+    assert json.loads(store.get(job_id)['result']) == envelope
 
 
 @pytest.mark.parametrize('content, expected', [
@@ -197,35 +269,32 @@ def test_get_terminal_returns_saved_envelope(client, png_800):
 def test_upload_rejects_invalid_format_or_decode(client, content, expected):
     resp = upload(client, content)
     assert (resp.status_code, resp.json()['error']['code']) == expected
+    # 错误体除了码还要给中文原因，否则只能靠猜
+    assert resp.json()['error']['message']
+
+
+@pytest.mark.parametrize('make, reason, keyword', [
+    (lambda: image_bytes((799, 800)), 'invalid dimensions', '边长'),
+    (lambda: image_bytes((12001, 800)), 'invalid dimensions', '边长'),
+    # 超过 4000 万像素时 Pillow 的解压炸弹门禁先触发，不能笼统归为“文件损坏”
+    (lambda: image_bytes((6325, 6325)), 'decompression bomb', '像素'),
+    (lambda: animated_png(), 'animated image', '动图'),
+])
+def test_upload_rejects_undecodable_image_with_precise_chinese_reason(client, make, reason, keyword):
+    """边界、超大、动图不能笼统归为“无法安全解码”：details 给内部原因，message 给中文说明。"""
+    resp = upload(client, make())
+    assert resp.status_code == 422
+    body = resp.json()['error']
+    assert body['code'] == 'IMAGE_DECODE_FAILED'
+    assert body['details'] == {'reason': reason}
+    assert keyword in body['message']
 
 
 def test_upload_rejects_too_large(client):
     resp = upload(client, b'\x89PNG' + b'x' * (10 * 1024 * 1024))
     assert resp.status_code == 413
     assert resp.json()['error']['code'] == 'FILE_TOO_LARGE'
-
-
-@pytest.mark.parametrize('size', [(799, 800), (12001, 800)])
-def test_upload_rejects_dimension_boundaries(client, size):
-    resp = upload(client, image_bytes(size))
-    assert resp.status_code == 422
-    assert resp.json()['error']['code'] == 'IMAGE_DECODE_FAILED'
-
-
-def test_upload_rejects_over_40m_pixels(client):
-    resp = upload(client, image_bytes((6325, 6325)))
-    assert resp.status_code == 422
-    assert resp.json()['error']['code'] == 'IMAGE_DECODE_FAILED'
-
-
-def test_upload_rejects_animated_png(client):
-    first = Image.new('RGBA', (800, 800), 'white')
-    second = Image.new('RGBA', (800, 800), 'black')
-    output = io.BytesIO()
-    first.save(output, format='PNG', save_all=True, append_images=[second], duration=10)
-    resp = upload(client, output.getvalue())
-    assert resp.status_code == 422
-    assert resp.json()['error']['code'] == 'IMAGE_DECODE_FAILED'
+    assert resp.json()['error']['message'] == LEVEL_ERROR_MESSAGES['FILE_TOO_LARGE']
 
 
 def test_upload_exif_orientation_is_transposed_and_saved_as_png(client, tmp_path):

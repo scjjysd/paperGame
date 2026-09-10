@@ -6,8 +6,8 @@ from pathlib import Path
 import pytest
 
 
-SCRIPTS_DIR = Path(__file__).resolve().parents[1] / 'scripts'
-sys.path.insert(0, str(SCRIPTS_DIR))
+TOOLS_DIR = Path(__file__).resolve().parents[1] / 'scripts' / 'tools'
+sys.path.insert(0, str(TOOLS_DIR))
 
 from gen_level_samples import generate_dataset  # noqa: E402
 

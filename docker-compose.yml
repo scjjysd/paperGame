@@ -72,6 +72,15 @@ services:
     environment:
       REDIS_URL: redis://redis:6379/0
       OUT_ROOT: /data/out
+      # 对外基址：响应里的 *Url 会拼上它。端口映射/反向代理下必须显式配置，
+      # 否则拿到的是容器内部 Host；留空则按请求 Host 推导。
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8000}
+      # 跨域：默认放开所有来源（本地/内网联调）；要携带凭证就得配成具体来源
+      CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-*}
+      CORS_ALLOW_CREDENTIALS: ${CORS_ALLOW_CREDENTIALS:-false}
+      # 日志：落 /data/out/logs（即宿主机 out/logs），文件名带日期；LOG_KEEP_DAYS=0 表示不清理
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_KEEP_DAYS: ${LOG_KEEP_DAYS:-0}
     ports:
       - "8000:8000"
     volumes:
@@ -96,6 +105,8 @@ services:
       OUT_ROOT: /data/out
       RENDER_USE_MESA: "true"
       TORCHSERVE_UPSTREAM: torchserve:8080
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_KEEP_DAYS: ${LOG_KEEP_DAYS:-0}
     volumes:
       - ./out:/data/out
     depends_on:
@@ -118,6 +129,8 @@ services:
       LEVEL_LLM_BASE_URL: ${LEVEL_LLM_BASE_URL:-}
       LEVEL_LLM_API_KEY: ${LEVEL_LLM_API_KEY:-}
       LEVEL_LLM_MODEL: ${LEVEL_LLM_MODEL:-}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_KEEP_DAYS: ${LOG_KEEP_DAYS:-0}
     volumes:
       - ./out:/data/out
     depends_on:

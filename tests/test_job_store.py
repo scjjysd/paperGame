@@ -41,11 +41,26 @@ def test_get_falls_back_to_result_json_snapshot(store, tmp_path):
     # Redis 无记录（TTL 过期模拟），但 runner 落盘的 result.json 存在
     job_dir = tmp_path / 'char_snap'
     job_dir.mkdir()
-    payload = {'status': 'needs_correction', 'reason': 'NO_HUMANOID', 'maskUrl': '/m.png', 'joints': []}
+    payload = {'status': 'needs_correction', 'reason': 'NO_HUMANOID', 'maskUrl': '/m.png', 'joints': [],
+               'createdAt': '2026-09-10T10:26:24Z', 'updatedAt': '2026-09-10T10:26:25Z'}
     (job_dir / 'result.json').write_text(json.dumps(payload))
     data = store.get('char_snap')
     assert data['status'] == 'needs_correction'
     assert json.loads(data['result']) == payload
+    # 快照里的时间戳必须带出来，否则幂等返回会出现 createdAt 缺失或 null
+    assert data['createdAt'] == '2026-09-10T10:26:24Z'
+    assert data['updatedAt'] == '2026-09-10T10:26:25Z'
+
+
+def test_snapshot_without_timestamps_still_rebuilds(store, tmp_path):
+    """早期快照没有时间戳字段，重建不能因此报错或造出空值。"""
+    job_dir = tmp_path / 'char_old'
+    job_dir.mkdir()
+    (job_dir / 'result.json').write_text(json.dumps({'status': 'ready'}))
+    data = store.get('char_old')
+    assert data['status'] == 'ready'
+    assert 'createdAt' not in data
+    assert 'updatedAt' not in data
 
 
 def test_get_corrupt_result_json_snapshot_returns_none(store, tmp_path):
