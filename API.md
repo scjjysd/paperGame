@@ -252,16 +252,327 @@ Content-Type: image/png
 
 产物缺失时显示占位块，不会产生坏图链接。页面顶部徽章直接写出中文原因（如 `needs_correction · NO_HUMANOID（画面里没有找到人形…）`）。未知 jobId 返回 `404` + `{"code":"JOB_NOT_FOUND"}`（JSON，不是 HTML）。
 
-### 2.7 关卡审查端点（预览用，非契约）
+### 2.7 `POST /v1/levels` — 上传关卡图，入队解析
 
-关卡链路的契约见 `level-image-to-json-api.md`；两个审查端点与 2.5 / 2.6 同构，专为人工预览而设：
+请求：`multipart/form-data`，**字段名必须是 `file`**。可选查询参数 `force=true` 强制重跑（见下）。
 
 ```
-GET /v1/levels/{jobId}/detail   一次拿到关卡图、识别几何、可玩性分析与全部产物的完整地址
-GET /v1/levels/{jobId}/view     同一份信息的单页 HTML，浏览器直开即可预览
+POST /v1/levels
+Content-Type: multipart/form-data; boundary=...
+
+--...
+Content-Disposition: form-data; name="file"; filename="paper-level.jpg"
+Content-Type: image/jpeg
+
+<图片字节>
 ```
 
-`/view` 一页含：
+可选表单字段：
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+|---|---|---:|---|---|
+| `file` | binary | 是 | — | JPEG 或 PNG 图片 |
+| `schemaVersion` | string | 否 | `1.0` | 客户端期望的关卡协议版本，当前只接受 `1.0` |
+| `playabilityProfile` | JSON string | 否 | 服务默认值 | 角色能力参数（仅影响可玩性分析，不影响几何识别） |
+
+`playabilityProfile` 示例与字段含义：
+
+```json
+{
+  "profileVersion": "unity-c1-test-1",
+  "maxJumpRisePixels": 150,
+  "maxJumpDistancePixels": 230,
+  "characterWidthPixels": 32,
+  "characterHeightPixels": 58,
+  "landingTolerancePixels": 6
+}
+```
+
+| 字段 | 类型 | 约束 | 说明 |
+|---|---|---|---|
+| `profileVersion` | string | 1～64 字符 | 能力配置版本，便于复现分析 |
+| `maxJumpRisePixels` | integer | `> 0` | 角色脚底可达到的最大垂直上升高度（像素） |
+| `maxJumpDistancePixels` | integer | `> 0` | 一次跳跃允许的最大水平位移（像素） |
+| `characterWidthPixels` | integer | `> 0` | 角色碰撞体宽度（像素） |
+| `characterHeightPixels` | integer | `> 0` | 角色碰撞体高度（像素） |
+| `landingTolerancePixels` | integer | `>= 0` | 着陆边界允许的误差（像素） |
+
+响应 `202 Accepted`：
+
+```json
+{
+  "jobId": "level_4e91a63bcf21",
+  "status": "queued",
+  "message": "排队中，等待关卡 worker 领取。",
+  "statusUrl": "http://localhost:8000/v1/levels/level_4e91a63bcf21",
+  "viewUrl": "http://localhost:8000/v1/levels/level_4e91a63bcf21/view",
+  "createdAt": "2026-09-07T08:30:15"
+}
+```
+
+`statusUrl` 是轮询地址，`viewUrl` 是浏览器可直接打开的审查页 —— 两者都是完整地址。
+
+**jobId 由文件内容 + 能力参数 + 算法主版本共同决定**：`"level_" + sha256(文件字节 + 规范化 profile JSON + 算法主版本).hexdigest()[:12]`。因此同一张图 + 同一套参数无论上传多少次都得到同一个 jobId，已存在的任务不会重复入队。
+
+**强制重跑 `?force=true`**：对已处于终态的任务，force 会清理旧终态与磁盘产物（`level.json`、`analysis.json`、`rectified.png` 等），状态重置为 `queued` 并重新入队。对正在 `processing` 的任务 force 会被拒绝（`409 JOB_IN_PROGRESS`），需等当前任务进入终态后再试。
+
+**图片限制**：JPEG 或 PNG（按文件头嗅探），单边 800～12,000 像素，总像素不超过 4000 万，不接受多帧动图，文件不超过 10 MiB。上传后服务端会自动做 EXIF 转置与模式归一化（统一输出 PNG），因此 `input.png` 可能与原始上传字节不同。
+
+错误（`message` 为服务端实际返回的中文原因，可直接展示给用户；关卡链路错误体为信封格式 `{"error": {"code", "message", "retryable", "requestId"}}`）：
+
+| 状态码 | code | message | 触发条件 |
+|---|---|---|---|
+| 400 | `UNSUPPORTED_SCHEMA_VERSION` | 服务端不支持该 schemaVersion，当前只接受 1.0。 | `schemaVersion` 不是 `1.0` |
+| 400 | `INVALID_PLAYABILITY_PROFILE` | 角色能力参数缺失或越界，请对照文档校验 playabilityProfile。 | `playabilityProfile` 不是合法 JSON 或字段越界 |
+| 413 | `FILE_TOO_LARGE` | 图片不能超过 10 MiB，请压缩后重传。 | 超过 10 MiB |
+| 415 | `UNSUPPORTED_IMAGE_FORMAT` | 仅支持 JPEG 或 PNG，请转换格式后重传。 | 文件头不是 JPEG 或 PNG |
+| 422 | `IMAGE_DECODE_FAILED` | 图片无法安全解码（具体原因见 `details.reason`）。 | 动图 / 边长不在 800~12000 / 超 4000 万像素 / 文件损坏 |
+| 409 | `JOB_IN_PROGRESS` | 任务正在处理中，不能强制重跑，请等当前任务进入终态。 | `force=true` 但任务尚未终态 |
+| 503 | `QUEUE_UNAVAILABLE` | 任务队列（Redis）不可用，请稍后重试。 | Redis 不可达 |
+
+### 2.8 `GET /v1/levels/{jobId}` — 轮询关卡状态（Unity 生产逻辑只依赖这个端点）
+
+六种状态。`queued`/`processing` 是非终态，`ready`/`needs_fix`/`needs_review`/`failed` 是终态。
+
+**① 非终态** — `queued` 排队中，`processing` 正在解析。带 `progress` 指示当前阶段。
+
+```json
+{
+  "jobId": "level_4e91a63bcf21",
+  "status": "processing",
+  "message": "解析中，正在拉正纸张、识别平台与终点。",
+  "statusUrl": "http://localhost:8000/v1/levels/level_4e91a63bcf21",
+  "viewUrl": "http://localhost:8000/v1/levels/level_4e91a63bcf21/view",
+  "progress": {
+    "stage": "detecting_platforms",
+    "stageLabel": "识别平台",
+    "percent": 55
+  },
+  "createdAt": "2026-09-07T08:30:15",
+  "updatedAt": "2026-09-07T08:30:18"
+}
+```
+
+`progress.stage` 是当前解析阶段（英文枚举值，不得依赖完整枚举），`progress.stageLabel` 是服务端给出的中文阶段名。当前阶段取值：
+
+| stage | stageLabel |
+|---|---|
+| `waiting` | 等待中 |
+| `validating_upload` | 校验上传图 |
+| `rectifying_paper` | 拉正纸张 |
+| `detecting_platforms` | 识别平台 |
+| `detecting_goal` | 识别终点 |
+| `semantic_review` | 语义复核 |
+| `validating_geometry` | 校验几何 |
+| `analyzing_playability` | 分析可玩性 |
+| `publishing_artifacts` | 发布产物 |
+
+**② `ready`** — 解析完成，关卡可玩。响应体含完整的 `result`（`level` + `analysis` + `artifacts`），字段与 `level-image-to-json-api.md` 第 6 节一致。
+
+```json
+{
+  "jobId": "level_4e91a63bcf21",
+  "status": "ready",
+  "message": "解析完成，关卡可玩。",
+  "statusUrl": "http://localhost:8000/v1/levels/level_4e91a63bcf21",
+  "viewUrl": "http://localhost:8000/v1/levels/level_4e91a63bcf21/view",
+  "schemaVersion": "1.0",
+  "algorithmVersion": "level-parser-1.0.0",
+  "createdAt": "2026-09-07T08:30:15",
+  "updatedAt": "2026-09-07T08:30:22",
+  "result": {
+    "level": { "…见 level-image-to-json-api.md 第 7 节" },
+    "analysis": { "…见 level-image-to-json-api.md 第 17 节" },
+    "artifacts": {
+      "inputUrl": "http://localhost:8000/artifacts/level_4e91a63bcf21/input.png",
+      "rectifiedImageUrl": "http://localhost:8000/artifacts/level_4e91a63bcf21/rectified.png",
+      "overlayImageUrl": "http://localhost:8000/artifacts/level_4e91a63bcf21/overlay.png",
+      "levelJsonUrl": "http://localhost:8000/artifacts/level_4e91a63bcf21/level.json",
+      "analysisJsonUrl": "http://localhost:8000/artifacts/level_4e91a63bcf21/analysis.json"
+    }
+  }
+}
+```
+
+`result` 三个子对象全部必填：`level`（权威关卡几何，含 `schemaVersion` / `coordinateSystem` / `canvas` / `background` / `playerStart` / `platforms` / `goalRegion`）、`analysis`（可玩性分析，含 `playability` / `profile` / `path` / `warnings`）、`artifacts`（产物地址，`*Url` 已是完整地址）。
+
+**③ `needs_fix`** — 识别可靠，但按提交的能力参数草图不可玩（跳不过去或终点悬空）。响应体结构与 `ready` 相同（含完整 `result`），区别在于 `analysis.playability` 为 `"unreachable"` 且 `analysis.warnings` 非空。
+
+```json
+{
+  "jobId": "level_4e91a63bcf21",
+  "status": "needs_fix",
+  "message": "解析完成，但存在可玩性问题（跳不过去或终点悬空）。",
+  "result": {
+    "level": { "…同上" },
+    "analysis": {
+      "playability": "unreachable",
+      "warnings": [
+        {
+          "code": "JUMP_GAP_TOO_HIGH",
+          "message": "platform_003 到 platform_004 的高度差超过当前跳跃能力。",
+          "relatedPlatformIds": ["platform_003", "platform_004"],
+          "requiredValuePixels": 184,
+          "availableValuePixels": 150
+        }
+      ]
+    },
+    "artifacts": { "…同上" }
+  }
+}
+```
+
+可玩性告警码（`analysis.warnings[].code`）：
+
+| code | 说明 |
+|---|---|
+| `START_NOT_SUPPORTED` | 出生点没有可靠承载平台 |
+| `GOAL_NOT_SUPPORTED` | 终点不在可到达平台附近 |
+| `JUMP_GAP_TOO_HIGH` | 垂直高度超过角色能力 |
+| `JUMP_GAP_TOO_WIDE` | 水平间距超过角色能力 |
+| `LANDING_AREA_TOO_SHORT` | 平台可着陆长度不足 |
+| `NO_PATH_TO_GOAL` | 可达图中不存在完整路径 |
+
+**④ `needs_review`** — 识别存在歧义（纸张/平台/终点/方向不确定），不能发布权威结果。不含 `result.level`，改给 `review` 与 `artifacts`。
+
+```json
+{
+  "jobId": "level_4e91a63bcf21",
+  "status": "needs_review",
+  "message": "识别证据不足，需要人工复核或重拍。",
+  "schemaVersion": "1.0",
+  "algorithmVersion": "level-parser-1.0.0",
+  "review": {
+    "reason": "AMBIGUOUS_GOAL",
+    "message": "检测到两个置信度接近的终点旗帜候选，请重拍或人工确认。",
+    "candidates": [
+      {"id": "goal_candidate_01", "type": "goal",
+       "region": {"x": 1080, "y": 130, "width": 88, "height": 120}, "confidence": 0.62}
+    ],
+    "suggestions": ["保证纸张边缘完整出现在画面中。", "只保留一个终点旗帜。"]
+  },
+  "artifacts": {
+    "rectifiedImageUrl": "http://localhost:8000/artifacts/level_4e91a63bcf21/rectified.png",
+    "overlayImageUrl": "http://localhost:8000/artifacts/level_4e91a63bcf21/overlay.png"
+  }
+}
+```
+
+`review.reason` 推荐取值：`PAPER_NOT_FOUND`、`PAPER_AMBIGUOUS`、`PAPER_OCCLUDED`、`ORIENTATION_AMBIGUOUS`、`NO_PLATFORM_DETECTED`、`PLATFORM_GEOMETRY_AMBIGUOUS`、`GOAL_NOT_FOUND`、`AMBIGUOUS_GOAL`、`START_PLATFORM_NOT_FOUND`、`LOW_CONFIDENCE`。
+
+**⑤ `failed`** — 技术故障（解析进程异常或依赖不可用），可重试。
+
+```json
+{
+  "jobId": "level_4e91a63bcf21",
+  "status": "failed",
+  "message": "解析失败，属于技术故障，可重试。",
+  "error": {
+    "code": "PROCESSING_CRASHED",
+    "message": "关卡解析进程异常退出或结果不符合契约，已自动重试一次。",
+    "retryable": true,
+    "requestId": "req_01J7BE8WZC6Y2K5Q74H86PRB01"
+  },
+  "createdAt": "2026-09-07T08:30:15",
+  "updatedAt": "2026-09-07T08:30:22"
+}
+```
+
+实际会出现的 `error.code`：`PROCESSING_TIMEOUT`（单次解析超 90 秒，已自动重试 1 次）、`PROCESSING_CRASHED`（解析进程崩溃，已自动重试 1 次）。
+
+**⑥ 未知 jobId** — `404` + `{"error":{"code":"JOB_NOT_FOUND","message":"任务不存在或已过期，请重新上传关卡图。","retryable":false,"requestId":"req_…"}}`。
+
+关卡链路的错误体一律是信封格式 `{"error": {"code", "message", "retryable", "requestId"}}`，与角色链路的扁平体 `{"code", "message"}` 不同，客户端按各自契约解析即可。
+
+### 2.9 `GET /v1/levels/{jobId}/detail` — 关卡全部产物汇总（审查用，非契约）
+
+一次拿到关卡图、识别几何、可玩性分析与全部产物的完整地址。**这是给人和调试工具用的端点，字段可能随开发调整；Unity 生产逻辑请只依赖 2.8。**
+
+与 2.8 的三个实质区别：
+1. **任何状态都能调**（含 `queued`/`processing`，此时 `progress.stageLabel` 给中文阶段名）；
+2. 产物按**磁盘实际存在**判定，缺失一律 `null`，不会给出坏链接；
+3. Redis 过期后仍能从磁盘的 `level.json` / `analysis.json` 重建预览。
+
+```json
+{
+  "jobId": "level_4e91a63bcf21",
+  "status": "ready",
+  "statusMessage": "解析完成，关卡可玩。",
+  "message": "解析完成，关卡可玩。",
+  "createdAt": "2026-09-07T08:30:15",
+  "updatedAt": "2026-09-07T08:30:22",
+  "parsedAt": "2026-09-07T16:30:22+08:00",
+  "schemaVersion": "1.0",
+  "algorithmVersion": "level-parser-1.0.0",
+  "statusUrl": "http://localhost:8000/v1/levels/level_4e91a63bcf21",
+  "detailUrl": "http://localhost:8000/v1/levels/level_4e91a63bcf21/detail",
+  "viewUrl": "http://localhost:8000/v1/levels/level_4e91a63bcf21/view",
+  "progress": null,
+  "canvas": {"width": 1245, "height": 810},
+  "artifacts": {
+    "inputUrl": "http://localhost:8000/artifacts/level_4e91a63bcf21/input.png",
+    "rectifiedImageUrl": "http://localhost:8000/artifacts/level_4e91a63bcf21/rectified.png",
+    "overlayImageUrl": "http://localhost:8000/artifacts/level_4e91a63bcf21/overlay.png",
+    "paperMaskUrl": "http://localhost:8000/artifacts/level_4e91a63bcf21/paper-mask.png",
+    "inkMaskUrl": "http://localhost:8000/artifacts/level_4e91a63bcf21/ink-mask.png",
+    "levelJsonUrl": "http://localhost:8000/artifacts/level_4e91a63bcf21/level.json",
+    "analysisJsonUrl": "http://localhost:8000/artifacts/level_4e91a63bcf21/analysis.json",
+    "transformJsonUrl": "http://localhost:8000/artifacts/level_4e91a63bcf21/transform.json",
+    "llmAuditUrl": null,
+    "resultJsonUrl": "http://localhost:8000/artifacts/level_4e91a63bcf21/result.json"
+  },
+  "level": {"…权威 level 对象，与 level-image-to-json-api.md 第 7 节一致"},
+  "analysis": {"…可玩性分析"},
+  "review": null,
+  "error": null,
+  "platforms": [
+    {"id": "platform_001", "start": {"x": 83, "y": 681}, "end": {"x": 298, "y": 681},
+     "length": 215, "confidence": 0.98, "onPath": true}
+  ],
+  "playability": "playable",
+  "path": ["platform_001", "platform_002"],
+  "warnings": [],
+  "profile": {"profileVersion": "unity-c1-test-1", "maxJumpRisePixels": 150},
+  "reviewReason": null
+}
+```
+
+字段说明：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `statusMessage` | string | 状态的中文说明 |
+| `message` | string | 综合中文原因（失败原因 > 复核原因 > 可玩性告警 > 状态说明） |
+| `parsedAt` | string \| null | 产物落盘时间，带时区偏移；尚无产物时为 `null` |
+| `canvas` | object | 画布尺寸（优先取契约，缺失时读拉正图实际尺寸） |
+| `artifacts` | object | 全部产物完整地址，按磁盘实际存在判定，缺失为 `null` |
+| `level` | object \| null | 权威关卡几何（`ready` / `needs_fix` 时非空） |
+| `analysis` | object \| null | 可玩性分析（含 `playability` / `warnings` / `profile`） |
+| `review` | object \| null | 复核信息（仅 `needs_review` 时非空） |
+| `error` | object \| null | 错误信息（仅 `failed` 时非空） |
+| `platforms` | array | 平台清单（含 `length` 与 `onPath`，方便审查页直接展示） |
+| `reviewReason` | string \| null | 复核原因（`needs_review` 时非空） |
+
+关卡产物目录布局：
+
+```
+/artifacts/{jobId}/input.png          上传原图（已归一化为 PNG）
+/artifacts/{jobId}/rectified.png      透视拉正图（契约坐标系即此图）
+/artifacts/{jobId}/overlay.png        服务端生成的识别叠加图
+/artifacts/{jobId}/paper-mask.png     纸张区域遮罩
+/artifacts/{jobId}/ink-mask.png       墨迹遮罩（平台证据来源）
+/artifacts/{jobId}/level.json         关卡几何 JSON（契约产物）
+/artifacts/{jobId}/analysis.json      可玩性分析 JSON
+/artifacts/{jobId}/transform.json     透视变换矩阵
+/artifacts/{jobId}/llm-audit.json     LLM 语义复核审计（有则存在）
+/artifacts/{jobId}/result.json        终态快照
+```
+
+未知 jobId 返回 `404` + `{"error":{"code":"JOB_NOT_FOUND","message":"…"}}`（关卡链路的信封体）。
+
+### 2.10 `GET /v1/levels/{jobId}/view` — 关卡单页审查 HTML
+
+返回 `text/html`，浏览器直接打开即可目视验收。内容与 2.9 同源，一页含：
 
 - 上传原图、透视拉正图、服务端叠加图、纸张/墨迹遮罩；
 - **浏览器端重绘的识别叠加图**：绿线 = 可达路径上的平台，橙线 = 未纳入路径，红框 = 终点区域与复核候选，紫点 = 出生点（不依赖服务端的 `overlay.png`，缺它也能预览）；
@@ -270,7 +581,7 @@ GET /v1/levels/{jobId}/view     同一份信息的单页 HTML，浏览器直开�
 - `needs_review` 时列出复核原因、候选区域与重拍建议；`failed` 时列出错误码与中文原因；
 - 产物完整地址清单（含 `level.json` / `analysis.json` / `transform.json` / `llm-audit.json`）。
 
-`/detail` 比契约端点多三件事：① 任何状态都能调（含 `queued`，带中文阶段名）；② 产物按**磁盘实际存在**判定，缺失一律 `null`；③ Redis 过期后仍能从 `level.json` / `analysis.json` 重建预览。未知 jobId 返回 `404` + `{"error":{"code":"JOB_NOT_FOUND","message":"…"}}`（关卡链路的信封体）。
+产物缺失时显示占位块，不会产生坏图链接。页面顶部徽章直接写出中文原因。未知 jobId 返回 `404` + `{"error":{"code":"JOB_NOT_FOUND"}}`（JSON，不是 HTML）。
 
 ---
 
