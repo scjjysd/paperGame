@@ -4,7 +4,7 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 
 API="${API_BASE:-http://localhost:8000}"
-SAMPLE="${1:-testdata/levels/synthetic/level1-background.png}"
+SAMPLE="${1:-testdata/levels/synthetic/front.png}"
 TIMEOUT_SEC="${TIMEOUT_SEC:-210}"
 TMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/smoke-levels.XXXXXX")
 trap 'rm -rf "$TMP_DIR"' EXIT

@@ -108,6 +108,44 @@ def test_custom_queue_terminal_states_and_rerun_artifacts(tmp_path):
     assert (job_dir / 'input.png').exists()
 
 
+def test_reset_rescues_created_at_from_disk_snapshot(store, tmp_path):
+    """force 重跑会删掉磁盘快照，而 Redis 可能已过期：createdAt 必须删前救回。
+
+    丢了它，levels API 会把 null 写进 request.json，关卡子进程的契约校验立即抛
+    ValidationError，任务被误判成 PROCESSING_CRASHED（重试永远好不了）。
+    """
+    job_dir = tmp_path / 'char_reset'
+    job_dir.mkdir()
+    (job_dir / 'result.json').write_text(json.dumps(
+        {'status': 'ready', 'createdAt': '2026-09-10T10:26:24Z', 'updatedAt': '2026-09-10T10:26:25Z'}))
+
+    store.reset('char_reset')
+
+    data = store.get('char_reset')
+    assert data['status'] == 'queued'
+    assert data['createdAt'] == '2026-09-10T10:26:24Z'
+    assert not (job_dir / 'result.json').exists()      # 快照确实被清了
+
+
+def test_reset_keeps_created_at_already_in_redis(store):
+    store.create('char_a')
+    original = store.get('char_a')['createdAt']
+    store.set_status('char_a', 'ready', result={'status': 'ready'})
+
+    store.reset('char_a')
+
+    assert store.get('char_a')['createdAt'] == original
+
+
+def test_reset_without_any_created_at_source_still_sets_one(store, tmp_path):
+    """既没 Redis 也没快照（历史脏目录）时，兜底用当前时间，不能留空。"""
+    (tmp_path / 'char_orphan').mkdir()
+
+    store.reset('char_orphan')
+
+    assert store.get('char_orphan')['createdAt']
+
+
 def test_set_progress_preserves_status(tmp_path):
     r = fakeredis.FakeStrictRedis(decode_responses=True)
     store = JobStore('redis://unused', tmp_path, client=r)

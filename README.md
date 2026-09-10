@@ -224,14 +224,16 @@ api 与 worker **分开部署**：故障域隔离、可独立 restart、可 `--s
 | 退出码协议 | 0 = 业务终态已写 `result.json`；非 0 = 基础设施故障 | 让主循环能区分「渲染判定为无人形」和「渲染进程崩了」 |
 | 错误码映射 | 超时 → `RENDER_TIMEOUT`；崩溃/result.json 损坏 → `RENDER_CRASHED`；动作资产缺失 → `ASSET_MISSING` | 客户端据稳定错误码分支处理 |
 
+`ASSET_MISSING` 目前只有一个可观测源头：`VENDOR`（AnimatedDrawings 仓库根）不在磁盘上。该路径由 `app/services/annotations.py` 单一来源推导、`render_scene` 直接复用（两处各自推导过，目录结构调整时漂移会让角色渲染 100% 失败）；缺失的具体路径与补救动作记在 `out/logs/render-runner-<日期>.log`，`tests/test_vendor_paths.py` 卡住漂移。
+
 ### 5.4 产物存储布局
 
 ```text
 out/jobs/{jobId}/
 ├── input.png        上传原图
 ├── anno/            mask.png / texture.png / char_cfg.yaml（needs_correction 时供骨架确认页用）
-├── run.png          run 精灵表（3107×339 RGBA，13 帧）
-├── jump.png         jump 精灵表（2868×339 RGBA，12 帧）
+├── run.png          run 精灵表（2410×275 RGBA，10 帧）
+├── jump.png         jump 精灵表（1687×275 RGBA，7 帧）
 └── result.json      终态快照
 ```
 
@@ -334,7 +336,7 @@ Level v1 已知边界：只支持单张横版纸、近水平直平台和单一�
  "message":"单次渲染超过 120 秒，自动重试后仍失败，请重试或简化画面。"}
 ```
 
-两个动作的 `frameWidth`/`frameHeight` **完全相等**（239×339）——这是 `render_character()` 取「所有动作全部帧内容包围盒的并集」作为统一帧尺寸的结果，Unity 因此能用同一套切帧参数播放 run 与 jump。反算可验证：`13 × 239 = 3107`、`12 × 239 = 2868`，与冒烟时下载到的精灵表实际像素宽逐字吻合。`footAnchor` 恒为 `(frameWidth // 2, frameHeight)`，即帧内水平居中、垂直贴底，供 Unity 落地对齐。
+两个动作的 `frameWidth`/`frameHeight` **完全相等**（241×275）——这是 `render_character()` 取「所有动作全部帧内容包围盒的并集」作为统一帧尺寸的结果，Unity 因此能用同一套切帧参数播放 run 与 jump。反算可验证：`10 × 241 = 2410`、`7 × 241 = 1687`，与冒烟时下载到的精灵表实际像素宽逐字吻合。`footAnchor` 恒为 `(frameWidth // 2, frameHeight)`，即帧内水平居中、垂直贴底，供 Unity 落地对齐。
 
 `joints` 正常路径固定 **16 项**；早期失败（`NO_HUMANOID`/`NO_CONTOUR` 等，此时 `char_cfg.yaml` 尚未生成）**为空数组**，客户端以 `reason` 提示重拍。`contracts.py` 的校验器显式允许 `16 或 0` 两种长度。
 

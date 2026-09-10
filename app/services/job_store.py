@@ -69,10 +69,15 @@ class JobStore:
         """force 重跑：丢弃旧终态结果与磁盘产物，状态回到 queued 并刷新 TTL。
 
         必须先于 enqueue 调用；状态离开终态后 worker 的 set_status 才能再次写入。
+
+        createdAt 必须在删快照前救回来：任务记录可能只剩磁盘快照（Redis TTL 过期），
+        而 hset 会在不存在的 key 上建出没有 createdAt 的哈希。丢了它，调用方会往
+        request.json 写 null，关卡子进程契约校验随即抛 ValidationError 误判成 PROCESSING_CRASHED。
         """
         key = JOB_KEY.format(job_id)
+        created = (self.get(job_id) or {}).get('createdAt') or _now()
         self.r.hdel(key, 'result', 'stage')
-        self.r.hset(key, mapping={'status': 'queued', 'updatedAt': _now()})
+        self.r.hset(key, mapping={'status': 'queued', 'createdAt': created, 'updatedAt': _now()})
         self.r.expire(key, TTL_SECONDS)
         job_dir = self.jobs_root / job_id
         removed = []

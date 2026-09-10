@@ -224,3 +224,21 @@ def test_overlay_preserves_rectified_and_json_is_byte_stable(tmp_path, parser_st
     assert (tmp_path / 'overlay.png').read_bytes() != background
     assert first == second
     assert b'\n' not in first[0] and b'\n' not in first[1]
+
+
+def test_request_json_with_null_timestamps_does_not_break_payload(tmp_path):
+    """存量脏数据兜底：修复前 levels API 曾把 null 写进 request.json（Redis 过期后 force 重跑）。
+
+    这些文件已经在磁盘上了，解析层若把 None 透到终态 payload，会撞在
+    LevelNeedsFix.createdAt 的 str 校验上，整条任务被误判为 PROCESSING_CRASHED。
+    """
+    from app.services.level_parser import EPOCH_CREATED, _request
+
+    (tmp_path / 'request.json').write_text(
+        json.dumps({'createdAt': None, 'updatedAt': None}), encoding='utf-8')
+
+    profile, created, updated = _request(tmp_path)
+
+    assert profile == DEFAULT_PLAYABILITY_PROFILE
+    assert created == EPOCH_CREATED
+    assert updated == EPOCH_CREATED

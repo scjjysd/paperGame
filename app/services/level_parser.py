@@ -36,6 +36,8 @@ REVIEW_MESSAGES = {
     'START_PLATFORM_NOT_FOUND': '找不到可安全承载角色的出生平台。',
     'LOW_CONFIDENCE': '候选置信度不足，不能安全发布。',
 }
+# request.json 缺失或时间戳不可用时的占位值：保证终态契约的 str 字段拿到的是字符串
+EPOCH_CREATED = '1970-01-01T00:00:00Z'
 
 
 def _canonical_bytes(value: Any) -> bytes:
@@ -77,8 +79,10 @@ def _request(job_dir: Path) -> Tuple[PlayabilityProfile, str, str]:
     request = json.loads(request_path.read_text(encoding='utf-8')) if request_path.exists() else {}
     profile = PlayabilityProfile.model_validate(
         request.get('playabilityProfile', DEFAULT_PLAYABILITY_PROFILE.model_dump()))
-    created = request.get('createdAt', '1970-01-01T00:00:00Z')
-    return profile, created, request.get('updatedAt', created)
+    created = request.get('createdAt') or EPOCH_CREATED
+    # 用 or 而非 .get(key, default)：历史上写入过显式 null 的 request.json 仍在磁盘上，
+    # 把 None 透到终态 payload 会直接撞在 str 校验上，让整条任务被归为 PROCESSING_CRASHED。
+    return profile, created, (request.get('updatedAt') or created)
 
 
 def _candidate_region(candidate: Dict[str, Any], width: int, height: int) -> Dict[str, Any]:

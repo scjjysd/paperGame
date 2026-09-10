@@ -210,9 +210,51 @@ def test_force_resets_level_artifacts_and_requeues(client, png_800, tmp_path):
     assert not list(job_dir.glob('*.tmp*'))
     request = json.loads((job_dir / 'request.json').read_text())
     assert request['createdAt'] == accepted['createdAt']
-    assert request['updatedAt'] == accepted['createdAt']
+    # updatedAt 由 force 刷新，不能断言它等于 createdAt：_now 只有秒级精度，用例正好跨秒时会随机失败。
+    # 改与 reset 后的任务记录比对，既确定又能钉住「request.json 带的是本次重跑的时间戳」。
+    assert request['updatedAt'] == store.get(job_id)['updatedAt']
     assert (job_dir / 'input.png').exists()
     assert 'stage' not in store.get(job_id)
+
+
+def test_force_after_redis_expiry_rescues_created_at_from_snapshot(client, png_800, tmp_path):
+    """Redis 过期后 force 重跑：createdAt 只能从磁盘快照救回。
+
+    写进 request.json 的 null 会让关卡子进程的契约校验抛 ValidationError，
+    任务被归成 PROCESSING_CRASHED（告诉客户端可重试，但重试永远好不了）。
+    """
+    job_id = upload(client, png_800).json()['jobId']
+    store = client.app.state.level_store
+    job_dir = tmp_path / 'jobs' / job_id
+    snapshot = {'status': 'needs_fix', 'createdAt': '2026-09-10T10:26:24Z',
+                'updatedAt': '2026-09-10T10:26:25Z'}
+    (job_dir / 'result.json').write_text(json.dumps(snapshot))
+    store.r.delete('job:' + job_id)          # 模拟 TTL 过期：只剩磁盘快照
+
+    resp = upload(client, png_800, force=True)
+
+    assert resp.status_code == 202
+    assert resp.json()['createdAt'] == snapshot['createdAt']
+    request = json.loads((job_dir / 'request.json').read_text())
+    assert request['createdAt'] == snapshot['createdAt']
+    # updatedAt 由 reset 刷新（重跑本身就是一次新的状态变更），这里只要求它是可用字符串
+    assert request['updatedAt']
+    assert store.get(job_id)['createdAt'] == snapshot['createdAt']
+
+
+def test_force_with_legacy_snapshot_without_timestamps_still_emits_real_time(client, png_800, tmp_path):
+    """早期快照可能根本没有时间戳字段：救不到就用当前时间，绝不能写 null。"""
+    job_id = upload(client, png_800).json()['jobId']
+    store = client.app.state.level_store
+    job_dir = tmp_path / 'jobs' / job_id
+    (job_dir / 'result.json').write_text(json.dumps({'status': 'needs_fix'}))
+    store.r.delete('job:' + job_id)
+
+    resp = upload(client, png_800, force=True)
+
+    created = resp.json()['createdAt']
+    assert created and created != 'null'
+    assert json.loads((job_dir / 'request.json').read_text())['createdAt'] == created
 
 
 def test_get_processing_includes_progress_stage(client, png_800):

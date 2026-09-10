@@ -190,16 +190,17 @@ async def create_level(request: Request, force: bool = Query(False),
                         job_id, len(normalized), job_dir / 'input.png')
             store.create(job_id)
         created = store.get(job_id) or {}
+        # 用 _timestamps 而不是直接取值：缺失时干脆不写该字段，子进程会回退到默认值；
+        # 写成 null 会直接撞在终态契约的 str 校验上。
         _atomic_json(job_dir / 'request.json', {
             'playabilityProfile': profile.model_dump(),
-            'createdAt': created.get('createdAt'),
-            'updatedAt': created.get('updatedAt'),
+            **_timestamps(created, 'createdAt', 'updatedAt'),
         })
         store.enqueue(job_id)
     except redis.exceptions.RedisError:
         logger.error('关卡任务 %s 入队失败：任务队列（Redis）不可用', job_id, exc_info=True)
         return _error(503, 'QUEUE_UNAVAILABLE', retryable=True)
-    return _status_body(job_id, 'queued', base_url, createdAt=created.get('createdAt'))
+    return _status_body(job_id, 'queued', base_url, **_timestamps(created, 'createdAt'))
 
 
 @router.get('/{job_id}')
