@@ -7,9 +7,6 @@ venv/
 *.egg-info/
 uv.lock
 
-# 第三方源码（由 scripts/setup/setup-vendor.sh 拉取，不入库）
-#vendor/
-
 # 尖刺产物与中间文件
 out/
 *.mp4
