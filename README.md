@@ -159,7 +159,7 @@ jjhks/
 │   └── assets/motions/              ★ run.bvh/run.yaml、jump.bvh/jump.yaml + README（来源与调参结论）
 ├── scripts/                         验证脚本区（可 import app；反向禁止）
 │   ├── setup/                       环境设置（首次必做）
-│   │   ├── setup-vendor.sh          幂等克隆 AnimatedDrawings 到 vendor/
+│   │   ├── setup-vendor.sh          校验 vendor 源码，缺失时克隆
 │   │   └── setup_env.sh             建宿主 .venv + pip install -e vendor
 │   ├── smoke/                       冒烟测试（端到端验证）
 │   │   ├── smoke_e2e.sh             ★ 全栈端到端冒烟（上传→轮询→下载验 PNG→幂等复验）
@@ -181,7 +181,7 @@ jjhks/
 ├── docker-compose.yml               ★ 5 容器编排：torchserve / redis / api / worker / level-worker
 ├── requirements-service.txt         镜像内运行时依赖（vendor 子集，不含 torch，省 ~800MB）
 ├── requirements-dev.txt             宿主开发/测试依赖
-├── vendor/                          AnimatedDrawings 源码（.gitignore，由 setup-vendor.sh 拉取）
+├── vendor/                          AnimatedDrawings 源码（普通目录，由主仓库直接跟踪）
 └── out/                             产物与中间文件（.gitignore）：jobs/ logs/ spike/ mesa-spike/ ...
     └── logs/                        中文日志，按组件与日期拆分：api-2026-09-10.log、level-worker-…
 ```
@@ -384,7 +384,7 @@ FPS 固定 12。帧尺寸取该角色**所有动作**帧内容包围盒的并集
 ### 8.2 起全栈（5 容器）
 
 ```bash
-bash scripts/setup/setup-vendor.sh          # 幂等克隆 AnimatedDrawings 到 vendor/
+bash scripts/setup/setup-vendor.sh          # 校验已随仓库提供的 AnimatedDrawings 源码
 docker compose up -d --build
 curl http://localhost:8080/ping       # {"status": "Healthy"}
 curl http://localhost:8000/healthz    # {"status":"ok"}

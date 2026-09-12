@@ -1,7 +1,7 @@
 # 纸上游戏机 · 角色异步服务全栈（S1 尖刺 + 角色异步服务）
 # 管理 TorchServe 推理服务、Redis 队列、FastAPI 服务与渲染 worker。
 #
-# 启动前先执行 scripts/setup/setup-vendor.sh 拉取 AnimatedDrawings 源码，
+# AnimatedDrawings 源码随仓库提供，启动前可执行 scripts/setup/setup-vendor.sh 校验，
 # 首次构建镜像约 5-7 分钟，请为 Docker 分配至少 16GB 内存。
 #
 #   bash scripts/setup/setup-vendor.sh && docker compose up -d --build
