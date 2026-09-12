@@ -24,6 +24,12 @@ services:
     build:
       context: vendor/AnimatedDrawings/torchserve
       dockerfile: Dockerfile
+      network: host
+      args:
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        http_proxy: ${HTTP_PROXY:-}
+        https_proxy: ${HTTPS_PROXY:-}
     image: paper-game/ad-torchserve:local
     container_name: ad-torchserve
     # GPU 开关：默认 runc 完全不发起 GPU 请求（Mac 无 GPU 正常跑）；
@@ -66,6 +72,12 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      network: host
+      args:
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        http_proxy: ${HTTP_PROXY:-}
+        https_proxy: ${HTTPS_PROXY:-}
     image: paper-game/server:local
     container_name: pg-api
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

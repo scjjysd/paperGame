@@ -2,6 +2,16 @@
 
 FROM continuumio/miniconda3:24.1.2-0
 
+# 构建时可通过 --build-arg 传入宿主机代理；为空时保持直连。
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG http_proxy
+ARG https_proxy
+ENV HTTP_PROXY=${HTTP_PROXY} \
+    HTTPS_PROXY=${HTTPS_PROXY} \
+    http_proxy=${http_proxy} \
+    https_proxy=${https_proxy}
+
 # install os dependencies
 RUN mkdir -p /usr/share/man/man1
 
