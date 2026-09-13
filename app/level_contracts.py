@@ -14,6 +14,11 @@ ALGORITHM_MAJOR_VERSION = '1'
 # worker 写 result.json 与 API 即时报错共用本表，避免同一码在两处文案不一致。
 UNKNOWN_LEVEL_MESSAGE = '关卡解析失败，请查看服务端 out/logs 下的当天日志。'
 LEVEL_ERROR_MESSAGES = {
+    'START_NOT_FOUND': '生成关卡失败：未识别到起点圆圈，请画一个清晰的圆圈后重新拍照。',
+    'GOAL_NOT_FOUND': '生成关卡失败：未识别到终点旗帜，请画出三角旗面和旗杆后重新拍照。',
+    'START_AND_GOAL_NOT_FOUND': '生成关卡失败：未识别到起点圆圈和终点旗帜，请补画后重新拍照。',
+    'AMBIGUOUS_START': '生成关卡失败：识别到多个起点圆圈，请只保留一个。',
+    'AMBIGUOUS_GOAL': '生成关卡失败：终点旗帜不唯一，请只保留一个清晰的旗帜。',
     'UNSUPPORTED_SCHEMA_VERSION': '服务端不支持该 schemaVersion，当前只接受 1.0。',
     'INVALID_PLAYABILITY_PROFILE': '角色能力参数缺失或越界，请对照文档校验 playabilityProfile。',
     'FILE_TOO_LARGE': '图片不能超过 10 MiB，请压缩后重传。',
@@ -30,11 +35,11 @@ LEVEL_ERROR_MESSAGES = {
 # 任务状态 -> 中文说明，审查页与日志统一使用
 LEVEL_STATUS_MESSAGES = {
     'queued': '排队中，等待关卡 worker 领取。',
-    'processing': '解析中，正在拉正纸张、识别平台与终点。',
-    'ready': '解析完成，关卡可玩。',
+    'processing': '解析中，正在拉正纸张、识别平台与起终点。',
+    'ready': '解析完成，可以开始关卡。',
     'needs_fix': '解析完成，但存在可玩性问题（跳不过去或终点悬空）。',
     'needs_review': '识别证据不足，需要人工复核或重拍。',
-    'failed': '解析失败，属于技术故障，可重试。',
+    'failed': '生成关卡失败，请根据具体原因调整或重试。',
 }
 
 # 解析阶段 -> 中文说明（stage 本身是契约值，保持英文不变）
@@ -43,7 +48,7 @@ LEVEL_STAGE_MESSAGES = {
     'validating_upload': '校验上传图',
     'rectifying_paper': '拉正纸张',
     'detecting_platforms': '识别平台',
-    'detecting_goal': '识别终点',
+    'detecting_goal': '识别起点和终点',
     'semantic_review': '语义复核',
     'validating_geometry': '校验几何',
     'analyzing_playability': '分析可玩性',
@@ -176,7 +181,7 @@ class Warning(ContractModel):
 
 
 class PlayabilityAnalysis(ContractModel):
-    playability: Literal['playable', 'unreachable']
+    playability: Literal['playable', 'unreachable', 'not_checked']
     profile: PlayabilityProfile
     startPlatformId: Optional[str] = None
     goalPlatformId: Optional[str] = None
@@ -268,5 +273,7 @@ def canonical_profile_json(profile: PlayabilityProfile) -> bytes:
 
 
 def derive_level_job_id(content: bytes, profile: PlayabilityProfile) -> str:
-    digest = hashlib.sha256(content + canonical_profile_json(profile) + ALGORITHM_MAJOR_VERSION.encode('ascii')).hexdigest()
+    # 新规则要求显式起终点，不复用旧版自动推断起点的缓存结果。
+    digest = hashlib.sha256(content + canonical_profile_json(profile) + ALGORITHM_MAJOR_VERSION.encode('ascii')
+                            + b':explicit-markers-v1').hexdigest()
     return 'level_' + digest[:12]

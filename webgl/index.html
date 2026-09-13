@@ -4,6 +4,10 @@
     <meta charset="utf-8">
     <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
     <meta name="viewport" content="width=device-width, height=device-height, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <link rel="manifest" href="manifest.json">
     <title>PaperGame</title>
     <link rel="stylesheet" href="TemplateData/style.css">
   </head>
@@ -14,12 +18,15 @@
         <div id="unity-progress-bar-full"></div>
       </div>
       <div id="unity-warning"></div>
+      <div id="build-time">出包时间：2026-09-14 00:21:29 UTC+8</div>
     </div>
+    <button id="fullscreen-btn" onclick="enterFullscreen()">全屏</button>
     <script>
       var canvas = document.querySelector("#unity-canvas");
       var loadingBar = document.querySelector("#unity-loading-bar");
       var progressBarFull = document.querySelector("#unity-progress-bar-full");
       var warningBanner = document.querySelector("#unity-warning");
+      var fullscreenBtn = document.getElementById("fullscreen-btn");
 
       function unityShowBanner(message, type) {
         var item = document.createElement("div");
@@ -32,6 +39,37 @@
             item.remove();
           }, 5000);
         }
+      }
+
+      /* 全屏：用户点击触发，HTTPS/localhost 下生效 */
+      function enterFullscreen() {
+        var el = document.documentElement;
+        var fn = el.requestFullscreen || el.webkitRequestFullscreen || el.msRequestFullscreen;
+        if (fn) {
+          fn.call(el).catch(function () {});
+        }
+        fullscreenBtn.style.display = "none";
+      }
+
+      /* 横屏锁定 */
+      (function () {
+        var locked = false;
+        function lockLandscape() {
+          if (locked) return;
+          var so = screen.orientation;
+          if (so && so.lock) {
+            so.lock("landscape").catch(function () {});
+            locked = true;
+          }
+        }
+        ["click", "touchstart"].forEach(function (evt) {
+          document.addEventListener(evt, function () { lockLandscape(); }, { once: true, passive: true });
+        });
+      })();
+
+      /* PWA standalone 模式下隐藏全屏按钮（已经无地址栏了） */
+      if (window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone) {
+        fullscreenBtn.style.display = "none";
       }
 
       var buildUrl = "Build";

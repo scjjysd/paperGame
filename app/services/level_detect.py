@@ -6,11 +6,12 @@ curves should move to a contour-polyline model.
 """
 from __future__ import annotations
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Sequence, Tuple
 import cv2
 import numpy as np
+from app.services.level_markers import detect_markers
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +51,7 @@ class DetectionResult:
     platform_candidates: List[PlatformCandidate]
     goal_candidates: List[GoalCandidate]
     ink_mask_path: Path
+    start_candidates: List[PointCandidate] = field(default_factory=list)
 
 
 def _ink_mask(image: np.ndarray) -> np.ndarray:
@@ -216,6 +218,9 @@ def _platforms(ink, red, image):
         half_width = 1.0
         lo, hi = float(projections.min()) + half_width, float(projections.max()) - half_width
         a, b = origin + lo * unit, origin + hi * unit
+        # 与 Hough 路线一致：底边 7px 属于纸边/阴影，拟合端点也不得越界。
+        if max(a[1], b[1]) >= h - 7 or min(a[1], b[1]) < 0:
+            continue
         length = float(np.hypot(*(b - a)))
         if length < max(55., min(h, w) * .10):
             continue
@@ -247,24 +252,6 @@ def _platforms(ink, red, image):
             for i, (_, _, _, p) in enumerate(merged, 1)]
 
 
-def _goals(image, ink):
-    red = _red_mask(image)
-    count, labels, stats, _ = cv2.connectedComponentsWithStats(red, 8)
-    regions = []
-    for label in range(1, count):
-        x, y, w, h, area = map(int, stats[label])
-        if area < 20 or w < 5 or h < 5: continue
-        cx = x + w//2
-        nearby = ink[max(0,y-70):min(ink.shape[0],y+h+8), max(0,cx-5):min(ink.shape[1],cx+6)]
-        rows = np.flatnonzero(nearby.any(axis=1))
-        top = max(0, y-70) + int(rows[0]) if len(rows) and max(0,y-70)+int(rows[0]) < y-5 else y
-        confidence = min(.99, .72 + min(.25, area/1000))
-        regions.append((x, top, w, y+h-top, confidence))
-    regions.sort(key=lambda z: (z[1], z[0]))
-    return [GoalCandidate(f'goal_{i:03d}', RegionCandidate(int(x), int(y), int(w), int(h), float(c)), float(c))
-            for i, (x,y,w,h,c) in enumerate(regions, 1)]
-
-
 def detect(rectified_path: Path, job_dir: Path) -> DetectionResult:
     image = cv2.imread(str(rectified_path), cv2.IMREAD_COLOR)
     if image is None: raise ValueError(f'无法读取拉正图：{rectified_path}')
@@ -273,7 +260,11 @@ def detect(rectified_path: Path, job_dir: Path) -> DetectionResult:
     path = job_dir / 'ink-mask.png'; tmp = path.with_suffix('.tmp.png')
     if not cv2.imwrite(str(tmp), ink): raise OSError(f'无法写入墨迹遮罩：{tmp}')
     tmp.replace(path)
-    platforms, goals = _platforms(ink, red, image), _goals(image, ink)
+    circles, flags = detect_markers(image)
+    platforms = _platforms(ink, red, image)
+    goals = [GoalCandidate(f'goal_{i:03d}', RegionCandidate(x, y, w, h, .9), .9)
+             for i, (x, y, w, h) in enumerate(flags, 1)]
+    starts = [PointCandidate(x + w // 2, y + h - 1, .9) for x, y, w, h in circles]
     logger.info('关卡候选检测完成：平台 %d 条、终点 %d 个（图片 %s）',
                 len(platforms), len(goals), rectified_path)
-    return DetectionResult(platforms, goals, path)
+    return DetectionResult(platforms, goals, path, starts)

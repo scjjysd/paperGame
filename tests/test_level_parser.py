@@ -18,7 +18,7 @@ from app.services.level_semantic import SemanticResult
 STAGES = [
     'validating_upload', 'rectifying_paper', 'detecting_platforms',
     'detecting_goal', 'semantic_review', 'validating_geometry',
-    'analyzing_playability', 'publishing_artifacts',
+    'publishing_artifacts',
 ]
 
 
@@ -42,7 +42,8 @@ def parser_stubs(tmp_path, monkeypatch):
     platforms = [_platform('raw-b', 130, 120, 240, 120),
                  _platform('raw-a', 10, 180, 100, 180),
                  _platform('raw-c', 300, 70, 390, 70)]
-    detection = DetectionResult(platforms, [_goal()], tmp_path / 'ink-mask.png')
+    detection = DetectionResult(platforms, [_goal()], tmp_path / 'ink-mask.png',
+                                [PointCandidate(55, 160, .9)])
     state = {'detection': detection, 'semantic': SemanticResult('opencv', platforms, [_goal()]),
              'playability': 'playable', 'rectify_issue': None}
     stages = []
@@ -65,16 +66,13 @@ def parser_stubs(tmp_path, monkeypatch):
         return state['semantic']
 
     def analyze(level, profile):
-        return PlayabilityAnalysis(
-            playability=state['playability'], profile=profile,
-            startPlatformId='platform_001', goalPlatformId='platform_003',
-            path=['platform_001', 'platform_002', 'platform_003'] if state['playability'] == 'playable' else [],
-            warnings=[])
+        pytest.fail('关卡生成不得再调用可玩性分析')
 
     monkeypatch.setattr(level_parser.level_rectify, 'rectify', rectify)
     monkeypatch.setattr(level_parser.level_detect, 'detect', detect)
     monkeypatch.setattr(level_parser.level_semantic, 'review', review)
-    monkeypatch.setattr(level_parser.playability, 'analyze', analyze)
+    from app.services import playability
+    monkeypatch.setattr(playability, 'analyze', analyze)
     state['stages'] = stages
     state['progress'] = stages.append
     return state
@@ -95,7 +93,7 @@ def test_parse_ready_writes_aligned_authoritative_artifacts(tmp_path, parser_stu
     assert parser_stubs['stages'] == STAGES
     assert [p.id for p in level.platforms] == ['platform_001', 'platform_002', 'platform_003']
     assert level.playerStart.model_dump() == {
-        'x': 26, 'y': 180, 'source': 'inferred', 'confidence': .95}
+        'x': 55, 'y': 160, 'source': 'detected', 'confidence': .9}
     assert level.background.sha256 == hashlib.sha256((tmp_path / 'rectified.png').read_bytes()).hexdigest()
 
 
@@ -107,29 +105,31 @@ def test_parse_passes_injected_client_to_semantic_review(tmp_path, parser_stubs)
     assert parser_stubs['semantic_client'] is semantic_client
 
 
-def test_unplayable_is_needs_fix_and_keeps_exact_geometry(tmp_path, parser_stubs):
+def test_unplayable_is_ready_and_keeps_exact_geometry(tmp_path, parser_stubs):
     from app.services.level_parser import parse
 
     parser_stubs['playability'] = 'unreachable'
     before = [(p.start.x, p.start.y, p.end.x, p.end.y) for p in parser_stubs['semantic'].platforms]
     payload = parse(tmp_path, progress=parser_stubs['progress'])
 
-    assert payload['status'] == 'needs_fix'
+    assert payload['status'] == 'ready'
+    assert payload['result']['analysis']['playability'] == 'not_checked'
+    assert payload['result']['analysis']['warnings'] == []
     after = [(p['start']['x'], p['start']['y'], p['end']['x'], p['end']['y'])
              for p in payload['result']['level']['platforms']]
     assert after == [before[1], before[0], before[2]]
     assert (tmp_path / 'level.json').exists()
 
 
-def test_ambiguous_goal_is_needs_review_without_level_json(tmp_path, parser_stubs):
+def test_ambiguous_goal_is_failed_without_level_json(tmp_path, parser_stubs):
     from app.services.level_parser import parse
 
     goals = [_goal('goal-a', .64), _goal('goal-b', .61)]
     parser_stubs['semantic'] = SemanticResult('opencv', parser_stubs['semantic'].platforms, goals)
     payload = parse(tmp_path, progress=parser_stubs['progress'])
 
-    assert payload['status'] == 'needs_review'
-    assert payload['review']['reason'] == 'AMBIGUOUS_GOAL'
+    assert payload['status'] == 'failed'
+    assert payload['error']['code'] == 'AMBIGUOUS_GOAL'
     assert not (tmp_path / 'level.json').exists()
     assert (tmp_path / 'rectified.png').exists()
     assert (tmp_path / 'overlay.png').exists()
@@ -169,9 +169,7 @@ def test_rectify_review_reasons_never_publish_level(tmp_path, parser_stubs, reas
 
 @pytest.mark.parametrize('case, reason', [
     ('no-platform', 'NO_PLATFORM_DETECTED'),
-    ('no-goal', 'GOAL_NOT_FOUND'),
     ('low-confidence', 'LOW_CONFIDENCE'),
-    ('no-start', 'START_PLATFORM_NOT_FOUND'),
 ])
 def test_detection_review_reasons_never_publish_level(tmp_path, parser_stubs, case, reason):
     from app.services.level_parser import parse
@@ -242,3 +240,28 @@ def test_request_json_with_null_timestamps_does_not_break_payload(tmp_path):
     assert profile == DEFAULT_PLAYABILITY_PROFILE
     assert created == EPOCH_CREATED
     assert updated == EPOCH_CREATED
+
+
+@pytest.mark.parametrize('missing,code', [('start', 'START_NOT_FOUND'), ('goal', 'GOAL_NOT_FOUND'),
+                                         ('both', 'START_AND_GOAL_NOT_FOUND'), ('multiple', 'AMBIGUOUS_START')])
+def test_missing_markers_fail_and_remove_previous_level(tmp_path, parser_stubs, missing, code):
+    from app.services.level_parser import parse
+    from app.level_contracts import LevelFailed
+    assert parse(tmp_path)['status'] == 'ready'
+    if missing in ('start', 'both'):
+        parser_stubs['detection'] = replace(parser_stubs['detection'], start_candidates=[])
+    if missing == 'multiple':
+        parser_stubs['detection'] = replace(parser_stubs['detection'], start_candidates=[PointCandidate(20, 20), PointCandidate(50, 50)])
+    if missing in ('goal', 'both'):
+        parser_stubs['semantic'] = replace(parser_stubs['semantic'], goals=[])
+    payload = parse(tmp_path)
+    LevelFailed.model_validate(payload)
+    assert payload['error']['code'] == code
+    assert payload['error']['retryable'] is False
+    assert not (tmp_path / 'level.json').exists()
+
+
+def test_short_upper_platform_does_not_block_detected_start(tmp_path, parser_stubs):
+    from app.services.level_parser import parse
+    parser_stubs['semantic'] = replace(parser_stubs['semantic'], platforms=[_platform('short', 10, 20, 25, 20)])
+    assert parse(tmp_path)['status'] == 'ready'

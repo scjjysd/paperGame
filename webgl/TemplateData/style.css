@@ -59,6 +59,21 @@ body {
   padding: 10px;
 }
 
+#build-time {
+  position: absolute;
+  z-index: 3;
+  left: calc(6px + env(safe-area-inset-left, 0px));
+  bottom: calc(4px + env(safe-area-inset-bottom, 0px));
+  padding: 2px 5px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.5);
+  color: #fff;
+  font: 10px/1.4 sans-serif;
+  white-space: nowrap;
+  pointer-events: none;
+  user-select: none;
+}
+
 #unity-warning .warning {
   background: #fff3a3;
 }
@@ -66,4 +81,40 @@ body {
 #unity-warning .error {
   color: #fff;
   background: #c62828;
+}
+
+/* 竖屏时强制旋转 90° 横屏显示 */
+@media (orientation: portrait) {
+  html, body {
+    width: 100vh;
+    height: 100vw;
+  }
+  #unity-container {
+    width: 100vh;
+    height: 100vw;
+    transform: rotate(90deg);
+    transform-origin: top left;
+    position: absolute;
+    top: 100vw;
+    left: 0;
+  }
+}
+
+/* 全屏按钮：右上角小按钮，点击后自动隐藏 */
+#fullscreen-btn {
+  position: fixed;
+  top: 8px;
+  right: 8px;
+  z-index: 100;
+  padding: 4px 12px;
+  border: none;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.5);
+  color: #fff;
+  font: 12px/1.4 sans-serif;
+  cursor: pointer;
+  user-select: none;
+}
+#fullscreen-btn:active {
+  background: rgba(0, 0, 0, 0.75);
 }

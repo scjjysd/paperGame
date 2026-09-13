@@ -1,5 +1,6 @@
 """OpenCV 纸张检测、透视拉正与方向归一化。"""
 import json
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, List, Sequence, Tuple
@@ -9,6 +10,7 @@ import numpy as np
 
 
 Point = Tuple[float, float]
+_GRABCUT_LOCK = threading.Lock()
 
 
 class RectifyIssue(RuntimeError):
@@ -51,14 +53,137 @@ def _issue_candidates(contours: Sequence[np.ndarray]) -> List[dict]:
     return result
 
 
+def _edge_based_candidates(image: np.ndarray, image_area: float, scale: float):
+    """在单一尺度提取有闭合边界证据的四边形，返回原图坐标。"""
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    # 轻度模糊去噪，但保留纸张边缘的微弱梯度
+    gray = cv2.GaussianBlur(gray, (5, 5), 0)
+    edges = cv2.Canny(gray, 10, 30)
+    # 闭运算连接断裂的边缘，形成纸张轮廓
+    kernel = np.ones((5, 5), np.uint8)
+    edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel, iterations=2)
+    contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    candidates = []
+    for contour in contours:
+        area = cv2.contourArea(contour)
+        if area < image_area * 0.25:
+            continue
+        x, y, w, h = cv2.boundingRect(contour)
+        if ((x <= 2 and x + w >= image.shape[1] - 2)
+                or (y <= 2 and y + h >= image.shape[0] - 2)):
+            continue
+        hull = cv2.convexHull(contour)
+        perimeter = cv2.arcLength(hull, True)
+        if perimeter <= 0:
+            continue
+        polygon = cv2.approxPolyDP(hull, 0.02 * perimeter, True)
+        if len(polygon) != 4 or not cv2.isContourConvex(polygon):
+            continue
+        # 不把任意弯曲/不规则轮廓强行套成外接矩形，否则会把桌面当纸张。
+        if area / max(cv2.contourArea(hull), 1.0) < 0.90:
+            continue
+        points = polygon.reshape(-1, 2).astype(np.float32)
+        if scale < 1:
+            points /= scale
+        candidates.append(points)
+    return candidates
+
+
+def _multiscale_edge_candidates(image: np.ndarray) -> List[np.ndarray]:
+    """优先在低分辨率连接弱边缘，失败后用较高分辨率补充细节。"""
+    height, width = image.shape[:2]
+    previous_size = None
+    for max_side in (640, 1280):
+        scale = min(1.0, max_side / max(height, width))
+        size = (int(round(width * scale)), int(round(height * scale)))
+        if size == previous_size:
+            continue
+        previous_size = size
+        small = cv2.resize(image, size, interpolation=cv2.INTER_AREA) if scale < 1 else image
+        # 显式使用实际宽高比，避免整数取整造成坐标映射误差。
+        candidates = _edge_based_candidates(small, float(size[0] * size[1]), 1.0)
+        if candidates:
+            factors = np.array([width / size[0], height / size[1]], dtype=np.float32)
+            return [points * factors for points in candidates]
+    return []
+
+
+def _foreground_candidates(image: np.ndarray) -> List[np.ndarray]:
+    """用颜色/纹理前景分割恢复受不均匀光照影响的整张纸轮廓。"""
+    height, width = image.shape[:2]
+    scale = min(1.0, 960.0 / max(height, width))
+    size = (int(round(width * scale)), int(round(height * scale)))
+    small = cv2.resize(image, size, interpolation=cv2.INTER_AREA) if scale < 1 else image
+    h, w = small.shape[:2]
+    pad = max(12, int(min(h, w) * .04))
+    mask = np.zeros((h, w), np.uint8)
+    background = np.zeros((1, 65), np.float64)
+    foreground = np.zeros((1, 65), np.float64)
+    try:
+        # OpenCV 随机种子是进程全局状态；锁住初始化与分割，保证并发任务结果稳定。
+        with _GRABCUT_LOCK:
+            cv2.setRNGSeed(0)
+            cv2.grabCut(small, mask, (pad, pad, w - 2 * pad, h - 2 * pad),
+                        background, foreground, 3, cv2.GC_INIT_WITH_RECT)
+    except cv2.error:
+        return []
+    binary = np.where((mask == cv2.GC_FGD) | (mask == cv2.GC_PR_FGD), 255, 0).astype(np.uint8)
+    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, np.ones((11, 11), np.uint8), iterations=2)
+    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    result = []
+    for contour in contours:
+        if cv2.contourArea(contour) < h * w * .25:
+            continue
+        hull = cv2.convexHull(contour)
+        perimeter = cv2.arcLength(hull, True)
+        polygon = cv2.approxPolyDP(hull, .02 * perimeter, True)
+        if len(polygon) != 4 or not cv2.isContourConvex(polygon):
+            continue
+        factors = np.array([width / w, height / h], dtype=np.float32)
+        result.append(polygon.reshape(4, 2).astype(np.float32) * factors)
+    return result
+
+
+def _aspect_ratio(points: np.ndarray) -> float:
+    corners = order_corners(points)
+    widths = (np.linalg.norm(corners[1] - corners[0]) + np.linalg.norm(corners[2] - corners[3])) / 2
+    heights = (np.linalg.norm(corners[3] - corners[0]) + np.linalg.norm(corners[2] - corners[1])) / 2
+    return max(widths, heights) / max(min(widths, heights), 1.0)
+
+
+def _reasonable_foreground(candidate: np.ndarray, original: np.ndarray,
+                           image_shape: Tuple[int, int]) -> bool:
+    """限制 GrabCut 兜底候选，避免把整张桌面或其他大矩形替换成纸张。"""
+    height, width = image_shape
+    ordered = order_corners(candidate)
+    area = abs(float(cv2.contourArea(ordered.reshape(-1, 1, 2))))
+    if not 1.1 <= _aspect_ratio(ordered) <= 1.9:
+        return False
+    x, y, box_width, box_height = cv2.boundingRect(ordered.astype(np.float32))
+    if ((x <= 2 and x + box_width >= width - 2)
+            or (y <= 2 and y + box_height >= height - 2)):
+        return False
+    if not .25 <= area / float(width * height) <= .92:
+        return False
+    overlap, _ = cv2.intersectConvexConvex(order_corners(original), ordered)
+    original_area = abs(float(cv2.contourArea(order_corners(original).reshape(-1, 1, 2))))
+    return float(overlap) / max(original_area, 1.0) >= .65
+
+
 def _paper_candidates(image: np.ndarray) -> Tuple[List[np.ndarray], np.ndarray]:
     height, width = image.shape[:2]
     scale = min(1.0, 1600.0 / max(height, width))
     small = cv2.resize(image, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA) if scale < 1 else image
     gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
     gray = cv2.GaussianBlur(gray, (5, 5), 0)
-    # 阈值、面积和形状阈值依据 10 份固定合成样本与黄金图片标定；加入真实拍照集后必须重标定。
-    mask = cv2.inRange(gray, 210, 255)
+    # CLAHE 均衡局部光照：真实拍照常一侧亮一侧暗，直接阈值会丢失暗区纸张。
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    gray = clahe.apply(gray)
+    # Otsu 自动找纸张/背景最佳分割点，替代固定阈值 200；
+    # 均匀暗图（无纸张）Otsu 会退回 0，此时用固定阈值 200 兜底确保空图被拒绝。
+    otsu_thresh, mask = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    if otsu_thresh < 150:
+        _, mask = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((11, 11), np.uint8), iterations=2)
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     image_area = float(small.shape[0] * small.shape[1])
@@ -66,6 +191,11 @@ def _paper_candidates(image: np.ndarray) -> Tuple[List[np.ndarray], np.ndarray]:
     for contour in contours:
         area = cv2.contourArea(contour)
         if area < image_area * 0.25:
+            continue
+        # 真实纸张在透视下不会紧贴图像左右边界；
+        # 候选水平跨度覆盖整图宽度说明包含了背景（Otsu 过分割），拒绝。
+        x, _, w, _ = cv2.boundingRect(contour)
+        if x <= 2 and x + w >= small.shape[1] - 2:
             continue
         hull = cv2.convexHull(contour)
         perimeter = cv2.arcLength(hull, True)
@@ -78,6 +208,20 @@ def _paper_candidates(image: np.ndarray) -> Tuple[List[np.ndarray], np.ndarray]:
         if scale < 1:
             points /= scale
         candidates.append(points)
+    # 暗图回退可能得到空 mask；边缘路线不依赖亮度分割的覆盖率。
+    if not candidates:
+        candidates = _multiscale_edge_candidates(image)
+    # A4 纸被亮度梯度横向截断时会形成异常扁长四边形；GrabCut 用整体颜色和纹理恢复边界。
+    if candidates and _aspect_ratio(max(candidates, key=lambda c: cv2.contourArea(c.reshape(-1, 1, 2)))) > 1.9:
+        foreground = _foreground_candidates(image)
+        if foreground:
+            current = max(candidates, key=lambda c: cv2.contourArea(c.reshape(-1, 1, 2)))
+            foreground = [candidate for candidate in foreground
+                          if _reasonable_foreground(candidate, current, image.shape[:2])]
+            current_area = cv2.contourArea(current.reshape(-1, 1, 2))
+            foreground_area = max((cv2.contourArea(c.reshape(-1, 1, 2)) for c in foreground), default=0)
+            if foreground_area > current_area * 1.15:
+                candidates = foreground
     return candidates, mask
 
 
