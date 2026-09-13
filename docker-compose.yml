@@ -8,7 +8,7 @@
 #   curl http://localhost:8080/ping             # {"status": "Healthy"}
 #   curl http://localhost:8000/healthz        # {"status":"ok"}
 #   curl https://scjjysd.xyz:8443/healthz     # {"status":"ok"}
-#   Nginx 提供 HTTP/HTTPS；启动前放置 certs/fullchain.pem 和 certs/privkey.pem，详见 README。
+#   Nginx 提供 HTTP/HTTPS；启动前放置 certs/scjjysd.xyz.pem 和 certs/scjjysd.xyz.key，详见 README。
 #
 # GPU 开关（单文件，环境变量控制）：
 #   默认不启用 GPU：docker compose up -d          ← 现阶段唯一可用配置

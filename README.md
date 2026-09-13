@@ -436,16 +436,16 @@ HTTPS :8443 → Nginx :443 ─┘
 HTTP 不强制跳转 HTTPS。API 健康检查保持 HTTP；Nginx 健康检查验证两个入口均能到达 API。
 HTTPS 证书由 Nginx 读取，API 不再挂载证书。访问端仍需支持 IPv6。
 
-1. 首次切换前暂停 NAS 自动更新任务。下载 **Nginx（pem/key）** 证书包，将完整证书链
-   重命名为 `fullchain.pem`，对应私钥重命名为 `privkey.pem`，放入 NAS 原项目目录：
+1. 首次切换前暂停 NAS 自动更新任务。下载 **Nginx（pem/key）** 证书包，解压后保留原文件名：
+   `scjjysd.xyz.pem` 是证书链，`scjjysd.xyz.key` 是对应私钥，直接放入 NAS 原项目目录：
 
    ```text
    /vol2/1000/paperGame/
    ├── docker-compose.yml
    ├── docker/nginx.conf
    └── certs/
-       ├── fullchain.pem
-       └── privkey.pem
+       ├── scjjysd.xyz.pem
+       └── scjjysd.xyz.key
    ```
 
    中间证书若单独提供，按域名证书在前、中间证书在后的顺序拼入完整证书链。
