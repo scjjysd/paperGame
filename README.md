@@ -113,6 +113,7 @@ jjhks/
 ├── level-image-to-json-server-handoff.md  服务端交接文档
 ├── pyproject.toml                   Python 项目配置（依赖 + pytest）
 ├── conftest.py                      根级 pytest 配置
+├── webgl/                          Unity WebGL 完整构建产物，访问 /webgl/
 ├── docs/
 │   ├── animation-spike-results.md   ★ 任务 2 验收记录：20 样本逐张耗时、残留项清单
 │   ├── async-service-smoke-results.md ★ 任务 3 冒烟与回归结论
@@ -389,6 +390,28 @@ docker compose up -d --build
 curl http://localhost:8080/ping       # {"status": "Healthy"}
 curl http://localhost:8000/healthz    # {"status":"ok"}
 ```
+
+### WebGL 游戏页面
+
+将 Unity 导出的完整内容放入仓库根目录 `webgl/`，保持 `index.html`、`Build/`、
+`TemplateData/` 和可选的 `StreamingAssets/` 的相对路径。当前构建使用 gzip 压缩。
+
+- 本机访问：<http://localhost:8000/webgl/>；`/webgl` 会自动跳转到带斜杠的入口。
+- 局域网访问：`http://服务器IP:8000/webgl/`。
+- 本地 Python 启动：`.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000`。
+- Docker 首次接入本次服务端修改：`docker compose up -d --build api`。
+  API 容器只读挂载 `./webgl:/app/webgl:ro`，后续更新游戏只需完整替换该目录内容，
+  无需重建镜像；更新期间避免访问到新旧混合产物。若启动时目录不存在，补齐后需重启 API。
+
+服务为 `.gz` / `.br` 产物设置对应的 `Content-Encoding`，为 WASM 设置
+`application/wasm`；`.unityweb` 保留 Unity loader 自行解压。页面与资源使用
+`Cache-Control: no-cache`，浏览器可缓存，但使用前需要重新校验版本。
+
+Unity API 基址应指向页面同源服务器。局域网或域名部署时，将 `PUBLIC_BASE_URL`
+设为浏览器可访问的服务地址（不带 `/webgl`），例如
+`PUBLIC_BASE_URL=http://192.168.1.20:8000 docker compose up -d api`，避免 API 返回
+指向浏览器本机 `localhost` 的产物链接。客户端若硬编码 API 地址，需要在 Unity 侧修改后重新导出。
+以后若切换为多线程构建，需要配套 HTTPS 和 COOP/COEP 跨源隔离配置。
 
 ### 8.3 端到端冒烟
 

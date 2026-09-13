@@ -1,4 +1,4 @@
-"""FastAPI 应用工厂：跨域 + 中文日志 + 路由 + /artifacts 静态伺服 + /healthz。"""
+"""FastAPI 应用工厂：跨域 + 中文日志 + 路由 + /artifacts、/webgl 静态伺服 + /healthz。"""
 import logging
 import os
 import time
@@ -17,13 +17,14 @@ from app.api.character_view import router as character_view_router
 from app.api.characters import router as characters_router
 from app.api.level_view import router as level_view_router
 from app.api.levels import LEVEL_RERUN_ARTIFACTS, LEVEL_TERMINAL_STATES, router as levels_router
+from app.api.webgl import WebGLStaticFiles
 from app.log import setup_logging
 from app.services.job_store import JobStore
 
 logger = logging.getLogger(__name__)
 SERVER_DIR = Path(__file__).resolve().parents[1]
 # 健康探针每 10s 一次、产物下载频繁，按 INFO 记会淹没业务日志，降到 DEBUG
-QUIET_PATH_PREFIXES = ('/healthz', '/artifacts/')
+QUIET_PATH_PREFIXES = ('/healthz', '/artifacts/', '/webgl/')
 # HTTP 状态码 -> 框架级中文错误码
 FRAMEWORK_CODES: Dict[int, str] = {
     400: errors.INVALID_REQUEST,
@@ -115,6 +116,12 @@ def create_app() -> FastAPI:
         return errors.framework_error(500, errors.INTERNAL)
 
     app.mount('/artifacts', StaticFiles(directory=str(jobs_root)), name='artifacts')
+    webgl_root = SERVER_DIR / 'webgl'
+    if webgl_root.is_dir():
+        app.mount('/webgl', WebGLStaticFiles(directory=str(webgl_root), html=True), name='webgl')
+    else:
+        # worker 共用服务端镜像，但不挂载 WebGL；缺少构建产物不影响 API 启动。
+        logger.warning('WebGL 目录不存在，未启用 /webgl/：%s', webgl_root)
     app.include_router(characters_router)
     app.include_router(levels_router)
     app.include_router(character_view_router)   # 审查端点：/detail + /view

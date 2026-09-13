@@ -97,6 +97,7 @@ services:
       - "8000:8000"
     volumes:
       - ./out:/data/out
+      - ./webgl:/app/webgl:ro
     depends_on:
       redis:
         condition: service_healthy

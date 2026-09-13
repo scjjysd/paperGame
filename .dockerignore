@@ -1,5 +1,7 @@
 .venv/
 out/
+# WebGL 由 api 只读挂载，无需上传到镜像构建上下文。
+webgl/
 __pycache__/
 *.pyc
 vendor/AnimatedDrawings/.git/
