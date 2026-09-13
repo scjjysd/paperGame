@@ -1,0 +1,11 @@
+{
+  "name": "PaperGame",
+  "short_name": "PaperGame",
+  "description": "",
+  "start_url": "./",
+  "display": "standalone",
+  "orientation": "landscape",
+  "background_color": "#000000",
+  "theme_color": "#000000",
+  "icons": []
+}

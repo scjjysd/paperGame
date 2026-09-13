@@ -4,6 +4,10 @@
     <meta charset="utf-8">
     <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
     <meta name="viewport" content="width=device-width, height=device-height, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <link rel="manifest" href="manifest.json">
     <title>PaperGame</title>
     <link rel="stylesheet" href="TemplateData/style.css">
   </head>
@@ -14,7 +18,11 @@
         <div id="unity-progress-bar-full"></div>
       </div>
       <div id="unity-warning"></div>
-      <div id="build-time">出包时间：2026-09-13 15:22:08 UTC+8</div>
+      <div id="build-time">出包时间：2026-09-13 17:25:49 UTC+8</div>
+    </div>
+    <div id="rotate-hint">
+      <div class="rotate-icon">📱↻</div>
+      <div class="rotate-text">请横屏游玩</div>
     </div>
     <script>
       var canvas = document.querySelector("#unity-canvas");
@@ -34,6 +42,39 @@
           }, 5000);
         }
       }
+
+      /* 强制横屏：锁定屏幕方向，竖屏时显示旋转提示 */
+      (function () {
+        var hint = document.getElementById("rotate-hint");
+        var locked = false;
+
+        function lockLandscape() {
+          if (locked) return;
+          var so = screen.orientation;
+          if (so && so.lock) {
+            so.lock("landscape").catch(function () {});
+            locked = true;
+          }
+        }
+
+        function checkOrientation() {
+          var portrait = window.innerHeight > window.innerWidth;
+          hint.style.display = portrait ? "flex" : "none";
+        }
+
+        /* 用户首次交互时锁定方向（浏览器要求 gesture 才能 lock） */
+        ["click", "touchstart"].forEach(function (evt) {
+          document.addEventListener(evt, function () {
+            lockLandscape();
+          }, { once: true, passive: true });
+        });
+
+        window.addEventListener("resize", checkOrientation);
+        if (screen.orientation) {
+          screen.orientation.addEventListener("change", checkOrientation);
+        }
+        checkOrientation();
+      })();
 
       var buildUrl = "Build";
       var loaderUrl = buildUrl + "/C1WebGL.loader.js";

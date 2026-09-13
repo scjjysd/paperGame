@@ -82,3 +82,30 @@ body {
   color: #fff;
   background: #c62828;
 }
+
+#rotate-hint {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  background: #000;
+  color: #fff;
+}
+
+#rotate-hint .rotate-icon {
+  font-size: 48px;
+  animation: rotate-hint-spin 2s ease-in-out infinite;
+}
+
+#rotate-hint .rotate-text {
+  font: 20px/1.4 sans-serif;
+}
+
+@keyframes rotate-hint-spin {
+  0%, 100% { transform: rotate(0deg); }
+  50% { transform: rotate(90deg); }
+}
