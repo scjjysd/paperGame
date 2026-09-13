@@ -16,7 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from app.services.level_detect import DetectionResult, GoalCandidate, PlatformCandidate
 
 logger = logging.getLogger(__name__)
-PROMPT_VERSION = 'level-semantic-16.3-v1'
+PROMPT_VERSION = 'level-semantic-markers-v2'
 # 降级原因 -> 中文说明：LLM 不可用时链路仍能跑完，但不记日志就看不出结果为何变差
 DEGRADED_MESSAGES = {
     'LLM_CONFIGURATION_INVALID': 'LEVEL_LLM_* 配置不合法（base_url 必须是 HTTPS）',
@@ -29,7 +29,7 @@ PROMPT = """你是手绘横版平台关卡的候选分类器，不是关卡设�
 输入是一张已经完成透视拉正的纸张图片。图片上标出了 OpenCV 产生的候选编号。
 你的任务仅限于：
 1. 判断每个 line candidate 是平台墨迹、纸张边缘、阴影、文字或其他内容；
-2. 判断每个 goal candidate 是否为终点旗帜；
+2. 判断每个 goal candidate 是否为终点旗帜（旗杆加三角旗面，颜色不限，允许空心黑色笔画）；
 3. 指出是否存在多张纸、严重遮挡、方向不明确或无法判断的情况。
 
 禁止行为：

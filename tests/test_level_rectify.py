@@ -85,19 +85,25 @@ def test_rectify_does_not_publish_partially_written_artifacts(tmp_path, monkeypa
     assert not list(tmp_path.glob('*.tmp.png'))
 
 
-def test_rectify_rejects_image_without_paper(tmp_path):
-    image = np.full((900, 1280, 3), 180, dtype=np.uint8)
+@pytest.mark.parametrize('background', [100, 180, 230])
+@pytest.mark.parametrize('size', [(1280, 900), (2560, 1800)])
+def test_rectify_rejects_image_without_paper(tmp_path, background, size):
+    image = np.full((size[1], size[0], 3), background, dtype=np.uint8)
     input_path = tmp_path / 'blank.png'
     assert cv2.imwrite(str(input_path), image)
 
     with pytest.raises(RectifyIssue) as raised:
         rectify(input_path, tmp_path / 'out')
 
-    assert raised.value.reason == 'PAPER_NOT_FOUND'
+    if background < 200:
+        assert raised.value.reason == 'PAPER_NOT_FOUND'
+    else:
+        assert raised.value.reason in ('PAPER_NOT_FOUND', 'PAPER_OCCLUDED')
 
 
-def test_rectify_rejects_two_similar_papers(tmp_path):
-    image = np.full((900, 1280, 3), 180, dtype=np.uint8)
+@pytest.mark.parametrize('background', [100, 180])
+def test_rectify_rejects_two_similar_papers(tmp_path, background):
+    image = np.full((900, 1280, 3), background, dtype=np.uint8)
     cv2.rectangle(image, (50, 120), (570, 760), (248, 248, 248), -1)
     cv2.rectangle(image, (710, 120), (1230, 760), (248, 248, 248), -1)
     input_path = tmp_path / 'two-papers.png'
@@ -109,9 +115,10 @@ def test_rectify_rejects_two_similar_papers(tmp_path):
     assert raised.value.reason == 'PAPER_AMBIGUOUS'
 
 
-def test_rectify_rejects_occluded_paper(tmp_path):
+@pytest.mark.parametrize('background', [100, 180])
+def test_rectify_rejects_occluded_paper(tmp_path, background):
     image = cv2.imread(str(SAMPLES / 'sample-00.png'))
-    cv2.rectangle(image, (0, 0), (1280, 550), (180, 180, 174), -1)
+    cv2.rectangle(image, (0, 0), (1280, 550), (background, background, background - 6), -1)
     input_path = tmp_path / 'occluded.png'
     assert cv2.imwrite(str(input_path), image)
 
@@ -121,8 +128,9 @@ def test_rectify_rejects_occluded_paper(tmp_path):
     assert raised.value.reason == 'PAPER_OCCLUDED'
 
 
-def test_rectify_rejects_ambiguous_orientation_for_square_paper(tmp_path):
-    image = np.full((1000, 1000, 3), 180, dtype=np.uint8)
+@pytest.mark.parametrize('background', [100, 180])
+def test_rectify_rejects_ambiguous_orientation_for_square_paper(tmp_path, background):
+    image = np.full((1000, 1000, 3), background, dtype=np.uint8)
     cv2.rectangle(image, (100, 100), (900, 900), (248, 248, 248), -1)
     input_path = tmp_path / 'square.png'
     assert cv2.imwrite(str(input_path), image)
@@ -131,3 +139,27 @@ def test_rectify_rejects_ambiguous_orientation_for_square_paper(tmp_path):
         rectify(input_path, tmp_path / 'out')
 
     assert raised.value.reason == 'ORIENTATION_AMBIGUOUS'
+
+
+@pytest.mark.parametrize('scale', [1, 2])
+def test_rectify_recovers_real_low_contrast_paper(tmp_path, scale):
+    image = cv2.imread(str(ROOT / 'testdata/levels/real/low-contrast-paper.jpg'))
+    image = cv2.resize(image, None, fx=scale, fy=scale)
+    input_path = tmp_path / 'photo.png'
+    assert cv2.imwrite(str(input_path), image)
+    result = rectify(input_path, tmp_path / 'out')
+    # 人工依据可见纸边标注近似四角；纸边弯曲允许 25px 误差，不用算法输出充当真值。
+    expected = np.array([[85, 100], [1185, 55], [1235, 875], [20, 885]]) * scale
+    assert _corner_error(result.corners, expected) <= 25 * scale
+    assert cv2.imread(str(result.rectified_path)).shape[:2] == (560, 900)
+
+
+def test_rectify_preserves_dim_synthetic_paper_detection(tmp_path):
+    image = cv2.imread(str(SAMPLES / 'sample-00.png'))
+    image = (image * .7).astype(np.uint8)
+    input_path = tmp_path / 'dim.png'
+    assert cv2.imwrite(str(input_path), image)
+    result = rectify(input_path, tmp_path / 'out')
+    truth = json.loads((SAMPLES / 'sample-00.json').read_text(encoding='utf-8'))
+    expected = order_corners(np.array([[p['x'], p['y']] for p in truth['paperCorners']]))
+    assert _corner_error(result.corners, expected) <= 4

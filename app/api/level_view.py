@@ -30,7 +30,7 @@ TERMINAL_STATES = ('ready', 'needs_fix', 'needs_review', 'failed')
 STATUS_COLOR = {'ready': '#1a7f37', 'needs_fix': '#9a6700', 'needs_review': '#8250df',
                 'failed': '#cf222e', 'processing': '#0969da', 'queued': '#59636e'}
 PLAYABILITY_COLOR = {'playable': '#1a7f37', 'unreachable': '#cf222e'}
-PLAYABILITY_LABEL = {'playable': '可玩', 'unreachable': '不可达'}
+PLAYABILITY_LABEL = {'playable': '可玩', 'unreachable': '不可达', 'not_checked': '未检查'}
 PATH_COLOR, OFF_PATH_COLOR, GOAL_COLOR, START_COLOR = '#1a7f37', '#d97706', '#cf222e', '#ff00ff'
 
 # (响应字段, 磁盘文件名, 中文说明)：只列真实存在的文件，缺产物不给坏链接
@@ -240,6 +240,8 @@ def _overlay_figure(detail: Dict[str, Any]) -> str:
     """拉正图上叠几何：不依赖服务端的 overlay.png，缺它也能预览。"""
     image_url = (detail.get('artifacts') or {}).get('rectifiedImageUrl')
     label = '识别叠加（绿 = 可达路径上的平台，橙 = 未纳入路径，红框 = 终点/复核候选，紫点 = 出生点）'
+    if (detail.get('analysis') or {}).get('playability') == 'not_checked':
+        label = '识别叠加（橙色 = 平台，红框 = 终点，紫点 = 圆圈起点；未检查可达性）'
     if not image_url:
         return figure(None, '识别叠加')
     return ('<figure><div class="overlay"><img src="{}" alt="{}">{}</div>'
@@ -249,6 +251,8 @@ def _overlay_figure(detail: Dict[str, Any]) -> str:
 
 def _analysis_html(detail: Dict[str, Any]) -> str:
     analysis = detail.get('analysis')
+    if analysis and analysis.get('playability') == 'not_checked':
+        return '<p class="meta">已识别起点和终点；不判断平台承载、跳跃距离或通关可达性。</p>'
     if not analysis:
         return '<p class="empty">尚无可玩性分析（任务未进入分析阶段，或产物已被清理）。</p>'
     parts: List[str] = []

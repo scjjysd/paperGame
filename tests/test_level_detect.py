@@ -14,9 +14,8 @@ def _write_image(path: Path, size=(420, 300), lines=(), flags=()):
     for x1, y1, x2, y2, width in lines:
         cv2.line(image, (x1, y1), (x2, y2), (25, 25, 25), width)
     for x, y, w, h in flags:
-        cv2.rectangle(image, (x, y), (x + w, y + h), (0, 0, 255), 4)
-        cv2.line(image, (x + w // 2, y - 25), (x + w // 2, y + h), (30, 30, 30), 3)
-        cv2.fillPoly(image, [np.array([(x + w // 2, y - 25), (x + w, y - 12), (x + w // 2, y)], dtype=np.int32)], (0, 0, 255))
+        cv2.line(image, (x, y), (x, y + h), (30, 30, 30), 3)
+        cv2.polylines(image, [np.array([(x, y), (x + w, y + h // 5), (x, y + h // 2)], dtype=np.int32)], True, (0, 0, 255), 3)
     cv2.imwrite(str(path), image)
 
 
@@ -103,8 +102,8 @@ def test_detects_single_red_flag_candidate(tmp_path):
     assert len(result.goal_candidates) == 1
     goal = result.goal_candidates[0]
     assert goal.id == 'goal_001'
-    assert goal.region.x <= 300 and goal.region.y <= 45
-    assert goal.region.x + goal.region.width >= 355
+    assert abs(goal.region.x - 300) <= 6 and abs(goal.region.y - 70) <= 6
+    assert goal.region.x + goal.region.width >= 345
     assert goal.region.y + goal.region.height >= 150
     assert all(abs(p.start.x - 327) > 4 or abs(p.start.y - 70) > 4 for p in result.platform_candidates)
 
@@ -118,4 +117,3 @@ def test_multiple_flags_remain_separate_candidates(tmp_path):
 
     assert [g.id for g in first.goal_candidates] == ['goal_001', 'goal_002']
     assert [(g.region.x, g.region.y) for g in first.goal_candidates] == [(g.region.x, g.region.y) for g in second.goal_candidates]
-

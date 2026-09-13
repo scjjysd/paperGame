@@ -1,0 +1,90 @@
+from pathlib import Path
+
+import cv2
+import numpy as np
+import pytest
+
+from app.services.level_detect import detect
+from app.services.level_rectify import rectify
+
+
+def drawing(circle=True, flag=True, color=(25, 25, 25), filled=False):
+    image = np.full((560, 900, 3), 245, np.uint8)
+    cv2.line(image, (40, 400), (280, 400), color, 4)
+    cv2.line(image, (600, 220), (840, 220), color, 4)
+    if circle:
+        cv2.circle(image, (120, 380), 18, color, -1 if filled else 3)
+    if flag:
+        cv2.line(image, (740, 150), (742, 220), color, 3)
+        triangle = np.array([[740, 150], [780, 161], [741, 180]], np.int32)
+        if filled:
+            cv2.fillPoly(image, [triangle], color)
+        else:
+            cv2.polylines(image, [triangle], True, color, 3)
+    return image
+
+
+@pytest.mark.parametrize('color', [(25, 25, 25), (0, 0, 220), (170, 50, 30)])
+def test_detect_circle_and_triangle_flag_without_color_requirement(tmp_path, color):
+    path = tmp_path / 'drawing.png'
+    cv2.imwrite(str(path), drawing(color=color))
+    result = detect(path, tmp_path)
+    assert len(result.start_candidates) == 1
+    assert abs(result.start_candidates[0].x - 120) <= 5
+    assert abs(result.start_candidates[0].y - 398) <= 5
+    assert len(result.goal_candidates) == 1
+    region = result.goal_candidates[0].region
+    assert 730 <= region.x <= 745 and 140 <= region.y <= 155
+    assert region.x + region.width >= 775
+
+
+def test_triangle_without_pole_and_square_are_not_markers(tmp_path):
+    image = drawing(circle=False, flag=False)
+    cv2.polylines(image, [np.array([[400, 90], [440, 105], [400, 125]])], True, (20, 20, 20), 3)
+    cv2.rectangle(image, (100, 100), (130, 130), (20, 20, 20), 3)
+    path = tmp_path / 'noise.png'
+    cv2.imwrite(str(path), image)
+    result = detect(path, tmp_path)
+    assert not result.start_candidates
+    assert not result.goal_candidates
+
+
+def test_real_photo_detects_black_flag_but_no_start(tmp_path):
+    source = Path(__file__).resolve().parents[1] / 'testdata/levels/real/low-contrast-paper.jpg'
+    rectified = rectify(source, tmp_path)
+    result = detect(rectified.rectified_path, tmp_path)
+    assert not result.start_candidates
+    assert len(result.goal_candidates) == 1
+
+
+@pytest.mark.parametrize('add_circle', [False, True])
+def test_real_photo_full_parse_requires_start(tmp_path, monkeypatch, add_circle):
+    from app.services.level_parser import parse
+    from app.level_contracts import LevelReady, LevelFailed
+    for key in ('LEVEL_LLM_BASE_URL', 'LEVEL_LLM_API_KEY', 'LEVEL_LLM_MODEL'):
+        monkeypatch.delenv(key, raising=False)
+    source = Path(__file__).resolve().parents[1] / 'testdata/levels/real/low-contrast-paper.jpg'
+    image = cv2.imread(str(source))
+    if add_circle:
+        cv2.circle(image, (160, 675), 15, (25, 25, 25), 3)
+    cv2.imwrite(str(tmp_path / 'input.png'), image)
+    result = parse(tmp_path)
+    if add_circle:
+        LevelReady.model_validate(result)
+        assert result['result']['analysis']['playability'] == 'not_checked'
+        assert result['result']['level']['playerStart']['source'] == 'detected'
+    else:
+        LevelFailed.model_validate(result)
+        assert result['error']['code'] == 'START_NOT_FOUND'
+        assert not result['error']['retryable']
+
+
+def test_multiple_circles_and_flags_are_preserved_for_rejection(tmp_path):
+    image = drawing()
+    cv2.circle(image, (330, 350), 18, (25, 25, 25), 3)
+    cv2.line(image, (420, 90), (420, 160), (25, 25, 25), 3)
+    cv2.polylines(image, [np.array([[420, 90], [460, 105], [420, 120]])], True, (25, 25, 25), 3)
+    cv2.imwrite(str(tmp_path / 'drawing.png'), image)
+    result = detect(tmp_path / 'drawing.png', tmp_path)
+    assert len(result.start_candidates) == 2
+    assert len(result.goal_candidates) == 2

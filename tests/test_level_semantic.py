@@ -137,7 +137,7 @@ def test_audit_is_atomic_and_does_not_contain_api_key(tmp_path, detection):
     audit = json.loads(audit_path.read_text(encoding='utf-8'))
     assert result.source == 'llm'
     assert audit['model'] == 'reviewer'
-    assert audit['promptVersion'] == 'level-semantic-16.3-v1'
+    assert audit['promptVersion'] == 'level-semantic-markers-v2'
     assert audit['requestCandidateIds'] == ['line_001', 'line_002', 'goal_001', 'goal_002']
     assert 'top-secret-key' not in audit_path.read_text(encoding='utf-8')
     assert not (tmp_path / 'llm-audit.json.tmp').exists()

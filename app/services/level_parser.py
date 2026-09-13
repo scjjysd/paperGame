@@ -1,4 +1,4 @@
-"""编排关卡识别、几何门禁、可玩性分析与权威产物发布。"""
+"""编排关卡识别、显式起终点校验与权威产物发布，不判断可玩性。"""
 import hashlib
 import json
 import logging
@@ -10,8 +10,9 @@ import numpy as np
 from pydantic import ValidationError
 
 from app.level_contracts import (ALGORITHM_VERSION, DEFAULT_PLAYABILITY_PROFILE,
-                                 Level, PlayabilityProfile, SCHEMA_VERSION)
-from app.services import level_detect, level_rectify, level_semantic, playability
+                                 Level, PlayabilityProfile, PlayabilityAnalysis, SCHEMA_VERSION,
+                                 LEVEL_ERROR_MESSAGES)
+from app.services import level_detect, level_rectify, level_semantic
 
 logger = logging.getLogger(__name__)
 
@@ -58,16 +59,6 @@ def _atomic_json(path: Path, value: Any) -> None:
 def _stage(progress: Progress, name: str) -> None:
     if progress is not None:
         progress(name)
-
-
-def _pixels_hint(warning: Any) -> str:
-    """告警的像素数值是可选的（如 GOAL_NOT_SUPPORTED 根本没有），缺失时别打出「需要 None 像素」。"""
-    required, available = warning.requiredValuePixels, warning.availableValuePixels
-    if required is None and available is None:
-        return ''
-    return '，需要 {} 像素，实际 {} 像素'.format(
-        '未知' if required is None else required,
-        '未知' if available is None else available)
 
 
 def _artifact_url(job_id: str, name: str) -> str:
@@ -164,22 +155,6 @@ def _platforms(candidates: Sequence[Any]) -> List[Dict[str, Any]]:
                        'end': {'x': end.x, 'y': end.y},
                        'confidence': candidate.confidence})
     return result
-
-
-def _start(candidates: Sequence[Any], profile: PlayabilityProfile,
-           height: int) -> Optional[Dict[str, Any]]:
-    margin = max(profile.characterWidthPixels // 2, 8)
-    eligible = [candidate for candidate in candidates
-                if (candidate.start.y + candidate.end.y) / 2 >= height / 2
-                and candidate.end.x - candidate.start.x >= profile.characterWidthPixels
-                and candidate.start.x + margin <= candidate.end.x - margin]
-    if not eligible:
-        return None
-    chosen = min(eligible, key=lambda p: (p.start.x, (p.start.y + p.end.y) / 2, p.id))
-    x = chosen.start.x + margin
-    ratio = (x - chosen.start.x) / max(chosen.end.x - chosen.start.x, 1)
-    y = int(round(chosen.start.y + ratio * (chosen.end.y - chosen.start.y)))
-    return {'x': x, 'y': y, 'source': 'inferred', 'confidence': chosen.confidence}
 
 
 def _goal_region(goal: Any) -> Dict[str, Any]:
@@ -287,6 +262,26 @@ def parse(job_dir: Path, progress: Progress = None,
     logger.info('关卡任务 %s 语义复核完成：来源 %s，保留平台 %d 条、终点 %d 个，复核标记 %s',
                 job_id, semantic.source, len(semantic.platforms), len(semantic.goals),
                 '、'.join(semantic.review_reasons) or '无')
+    starts = detection.start_candidates
+    marker_error = None
+    if not starts and not semantic.goals:
+        marker_error = 'START_AND_GOAL_NOT_FOUND'
+    elif not starts:
+        marker_error = 'START_NOT_FOUND'
+    elif not semantic.goals:
+        marker_error = 'GOAL_NOT_FOUND'
+    elif len(starts) != 1:
+        marker_error = 'AMBIGUOUS_START'
+    elif len(semantic.goals) != 1 or 'AMBIGUOUS_GOAL' in semantic.review_reasons:
+        marker_error = 'AMBIGUOUS_GOAL'
+    if marker_error:
+        logger.info('关卡任务 %s 生成失败：%s，起点 %d 个，终点 %d 个',
+                    job_id, marker_error, len(starts), len(semantic.goals))
+        _publish_review_artifacts(job_dir, marker_error, semantic.goals,
+                                  rectified.rectified_path, progress)
+        return {'jobId': job_id, 'status': 'failed', 'createdAt': created, 'updatedAt': updated,
+                'error': {'code': marker_error, 'message': LEVEL_ERROR_MESSAGES[marker_error],
+                          'retryable': False, 'requestId': 'req_' + job_id}}
     reason = _pre_review(semantic)
     if reason:
         candidates = semantic.goals if reason in ('GOAL_NOT_FOUND', 'AMBIGUOUS_GOAL') else semantic.platforms
@@ -305,14 +300,8 @@ def parse(job_dir: Path, progress: Progress = None,
                                   rectified.rectified_path, progress)
         return _review_payload(job_dir, 'PLATFORM_GEOMETRY_AMBIGUOUS', semantic.platforms,
                                rectified.width, rectified.height, created, updated)
-    start = _start(semantic.platforms, profile, rectified.height)
-    if start is None:
-        logger.warning('关卡任务 %s 找不到可承载角色的出生平台（画布高 %d，角色宽 %d）',
-                       job_id, rectified.height, profile.characterWidthPixels)
-        _publish_review_artifacts(job_dir, 'START_PLATFORM_NOT_FOUND', semantic.platforms,
-                                  rectified.rectified_path, progress)
-        return _review_payload(job_dir, 'START_PLATFORM_NOT_FOUND', semantic.platforms,
-                               rectified.width, rectified.height, created, updated)
+    start = {'x': starts[0].x, 'y': starts[0].y, 'source': 'detected',
+             'confidence': starts[0].confidence}
 
     background_url = _artifact_url(job_id, 'rectified.png')
     level_data = {'schemaVersion': SCHEMA_VERSION,
@@ -333,8 +322,7 @@ def parse(job_dir: Path, progress: Progress = None,
                                   rectified.rectified_path, progress)
         return _review_payload(job_dir, 'PLATFORM_GEOMETRY_AMBIGUOUS', semantic.platforms,
                                rectified.width, rectified.height, created, updated)
-    _stage(progress, 'analyzing_playability')
-    analysis = playability.analyze(level, profile)
+    analysis = PlayabilityAnalysis(playability='not_checked', profile=profile)
     _stage(progress, 'publishing_artifacts')
     _overlay(rectified.rectified_path, level, analysis)
     _atomic_json(job_dir / 'level.json', level.model_dump())
@@ -344,14 +332,9 @@ def parse(job_dir: Path, progress: Progress = None,
                  'overlayImageUrl': _artifact_url(job_id, 'overlay.png'),
                  'levelJsonUrl': _artifact_url(job_id, 'level.json'),
                  'analysisJsonUrl': _artifact_url(job_id, 'analysis.json')}
-    status = 'ready' if analysis.playability == 'playable' else 'needs_fix'
-    logger.info('关卡任务 %s 解析完成：%s，%d 块平台，可玩性 %s，告警 %d 条',
-                job_id, status, len(level.platforms), analysis.playability, len(analysis.warnings))
-    for warning in analysis.warnings:
-        logger.warning('关卡任务 %s 可玩性告警 [%s] %s（相关平台 %s%s）',
-                       job_id, warning.code, warning.message,
-                       '、'.join(warning.relatedPlatformIds) or '无',
-                       _pixels_hint(warning))
+    status = 'ready'
+    logger.info('关卡任务 %s 解析完成：%s，%d 块平台，起点和终点已识别，跳过可玩性判断',
+                job_id, status, len(level.platforms))
     return {'jobId': job_id, 'schemaVersion': SCHEMA_VERSION,
             'algorithmVersion': ALGORITHM_VERSION, 'createdAt': created, 'updatedAt': updated,
             'status': status,

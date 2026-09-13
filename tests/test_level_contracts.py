@@ -41,6 +41,20 @@ def test_level_job_id_is_stable_and_profile_sensitive():
     assert canonical_profile_json(DEFAULT_PLAYABILITY_PROFILE)
     assert ALGORITHM_MAJOR_VERSION == '1'
 
+
+def test_explicit_marker_jobs_do_not_reuse_old_inferred_start_cache():
+    import hashlib
+    old_digest = hashlib.sha256(b'image' + canonical_profile_json(DEFAULT_PLAYABILITY_PROFILE)
+                                + ALGORITHM_MAJOR_VERSION.encode('ascii')).hexdigest()
+    assert derive_level_job_id(b'image', DEFAULT_PLAYABILITY_PROFILE) != 'level_' + old_digest[:12]
+
+
+def test_ready_contract_accepts_skipped_playability():
+    import json
+    payload = json.loads((FIXTURES / 'ready.json').read_text())
+    payload['result']['analysis'].update(playability='not_checked', path=[], warnings=[])
+    assert LevelReady.model_validate(payload).result.analysis.playability == 'not_checked'
+
 def _level_data():
     return {
         'schemaVersion': '1.0',

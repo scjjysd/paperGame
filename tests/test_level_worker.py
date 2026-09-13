@@ -53,9 +53,12 @@ def test_business_terminal_is_completed_without_retry(tmp_path, status):
     assert len(attempts) == 1
 
 
-def test_failed_business_terminal_is_completed_without_retry(tmp_path):
+@pytest.mark.parametrize('code,retryable', [('UPSTREAM_FAILED', True), ('START_NOT_FOUND', False),
+                                         ('GOAL_NOT_FOUND', False), ('START_AND_GOAL_NOT_FOUND', False)])
+def test_failed_business_terminal_is_completed_without_retry(tmp_path, code, retryable):
     job_dir = _job(tmp_path)
-    payload = _failed_payload()
+    payload = _failed_payload(code=code)
+    payload['error']['retryable'] = retryable
     (job_dir / 'result.json').write_text(json.dumps(payload))
     attempts = []
     store = FakeStore(tmp_path)
