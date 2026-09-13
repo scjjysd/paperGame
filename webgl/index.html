@@ -18,17 +18,15 @@
         <div id="unity-progress-bar-full"></div>
       </div>
       <div id="unity-warning"></div>
-      <div id="build-time">出包时间：2026-09-13 17:25:49 UTC+8</div>
+      <div id="build-time">出包时间：2026-09-13 22:40:08 UTC+8</div>
     </div>
-    <div id="rotate-hint">
-      <div class="rotate-icon">📱↻</div>
-      <div class="rotate-text">请横屏游玩</div>
-    </div>
+    <button id="fullscreen-btn" onclick="enterFullscreen()">全屏</button>
     <script>
       var canvas = document.querySelector("#unity-canvas");
       var loadingBar = document.querySelector("#unity-loading-bar");
       var progressBarFull = document.querySelector("#unity-progress-bar-full");
       var warningBanner = document.querySelector("#unity-warning");
+      var fullscreenBtn = document.getElementById("fullscreen-btn");
 
       function unityShowBanner(message, type) {
         var item = document.createElement("div");
@@ -43,11 +41,19 @@
         }
       }
 
-      /* 强制横屏：锁定屏幕方向，竖屏时显示旋转提示 */
-      (function () {
-        var hint = document.getElementById("rotate-hint");
-        var locked = false;
+      /* 全屏：用户点击触发，HTTPS/localhost 下生效 */
+      function enterFullscreen() {
+        var el = document.documentElement;
+        var fn = el.requestFullscreen || el.webkitRequestFullscreen || el.msRequestFullscreen;
+        if (fn) {
+          fn.call(el).catch(function () {});
+        }
+        fullscreenBtn.style.display = "none";
+      }
 
+      /* 横屏锁定 */
+      (function () {
+        var locked = false;
         function lockLandscape() {
           if (locked) return;
           var so = screen.orientation;
@@ -56,25 +62,15 @@
             locked = true;
           }
         }
-
-        function checkOrientation() {
-          var portrait = window.innerHeight > window.innerWidth;
-          hint.style.display = portrait ? "flex" : "none";
-        }
-
-        /* 用户首次交互时锁定方向（浏览器要求 gesture 才能 lock） */
         ["click", "touchstart"].forEach(function (evt) {
-          document.addEventListener(evt, function () {
-            lockLandscape();
-          }, { once: true, passive: true });
+          document.addEventListener(evt, function () { lockLandscape(); }, { once: true, passive: true });
         });
-
-        window.addEventListener("resize", checkOrientation);
-        if (screen.orientation) {
-          screen.orientation.addEventListener("change", checkOrientation);
-        }
-        checkOrientation();
       })();
+
+      /* PWA standalone 模式下隐藏全屏按钮（已经无地址栏了） */
+      if (window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone) {
+        fullscreenBtn.style.display = "none";
+      }
 
       var buildUrl = "Build";
       var loaderUrl = buildUrl + "/C1WebGL.loader.js";
