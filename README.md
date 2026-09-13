@@ -411,6 +411,21 @@ Unity API 基址应指向页面同源服务器。局域网或域名部署时，�
 设为浏览器可访问的服务地址（不带 `/webgl`），例如
 `PUBLIC_BASE_URL=http://192.168.1.20:8000 docker compose up -d api`，避免 API 返回
 指向浏览器本机 `localhost` 的产物链接。客户端若硬编码 API 地址，需要在 Unity 侧修改后重新导出。
+
+也可以在项目根目录 `.env` 中设置 `PUBLIC_BASE_URL=http://你的域名:8000`（纯 URL，
+不要写成 Markdown 链接）。留空时按请求 Host 推导。修改后需要重新创建 API 容器，
+`docker compose restart api` 不会重新加载环境变量；无需重新构建镜像：
+
+```bash
+docker compose up -d --no-deps --force-recreate api
+docker compose exec api printenv PUBLIC_BASE_URL
+```
+
+如果容器内仍是旧地址，检查启动 Compose 的 shell 是否设置了同名变量：shell 环境变量
+优先于 `.env`，可先执行 `unset PUBLIC_BASE_URL` 再运行上面的命令。
+本地直接运行 Uvicorn 不会自动加载 `.env`，应显式传入环境变量，例如
+`PUBLIC_BASE_URL=http://你的域名:8000 .venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000`。
+
 以后若切换为多线程构建，需要配套 HTTPS 和 COOP/COEP 跨源隔离配置。
 
 ### 8.3 端到端冒烟

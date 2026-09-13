@@ -86,7 +86,7 @@ services:
       OUT_ROOT: /data/out
       # 对外基址：响应里的 *Url 会拼上它。端口映射/反向代理下必须显式配置，
       # 否则拿到的是容器内部 Host；留空则按请求 Host 推导。
-      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8000}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
       # 跨域：默认放开所有来源（本地/内网联调）；要携带凭证就得配成具体来源
       CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-*}
       CORS_ALLOW_CREDENTIALS: ${CORS_ALLOW_CREDENTIALS:-false}
