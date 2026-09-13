@@ -24,10 +24,11 @@ def drawing(circle=True, flag=True, color=(25, 25, 25), filled=False):
     return image
 
 
+@pytest.mark.parametrize('filled', [False, True])
 @pytest.mark.parametrize('color', [(25, 25, 25), (0, 0, 220), (170, 50, 30)])
-def test_detect_circle_and_triangle_flag_without_color_requirement(tmp_path, color):
+def test_detect_circle_and_triangle_flag_without_color_requirement(tmp_path, color, filled):
     path = tmp_path / 'drawing.png'
-    cv2.imwrite(str(path), drawing(color=color))
+    cv2.imwrite(str(path), drawing(color=color, filled=filled))
     result = detect(path, tmp_path)
     assert len(result.start_candidates) == 1
     assert abs(result.start_candidates[0].x - 120) <= 5
@@ -47,6 +48,47 @@ def test_triangle_without_pole_and_square_are_not_markers(tmp_path):
     result = detect(path, tmp_path)
     assert not result.start_candidates
     assert not result.goal_candidates
+
+
+@pytest.mark.parametrize('face', ['rectangle', 'tee', 'elbow', 'diagonal'])
+def test_pole_with_non_triangular_face_is_not_flag(tmp_path, face):
+    image = drawing(circle=False, flag=False)
+    cv2.line(image, (420, 90), (420, 170), (20, 20, 20), 3)
+    if face == 'rectangle':
+        cv2.rectangle(image, (420, 90), (465, 125), (20, 20, 20), 3)
+    elif face == 'tee':
+        cv2.line(image, (420, 90), (465, 90), (20, 20, 20), 3)
+    elif face == 'elbow':
+        cv2.line(image, (420, 125), (465, 125), (20, 20, 20), 3)
+    else:
+        cv2.line(image, (420, 90), (465, 125), (20, 20, 20), 3)
+    path = tmp_path / f'{face}.png'
+    cv2.imwrite(str(path), image)
+    assert not detect(path, tmp_path).goal_candidates
+
+
+def test_large_open_circle_is_detected_without_becoming_flag(tmp_path):
+    image = drawing(circle=False, flag=False)
+    cv2.ellipse(image, (140, 350), (48, 48), 0, 25, 335, (20, 20, 20), 4)
+    path = tmp_path / 'large-open-circle.png'
+    cv2.imwrite(str(path), image)
+    result = detect(path, tmp_path)
+    assert len(result.start_candidates) == 1
+    assert abs(result.start_candidates[0].x - 140) <= 8
+    assert not result.goal_candidates
+
+
+@pytest.mark.parametrize('points', [
+    [[740, 150], [780, 150], [740, 185]],
+    [[740, 150], [780, 185], [740, 185]],
+])
+def test_right_triangle_flag_is_detected(tmp_path, points):
+    image = drawing(circle=False, flag=False)
+    cv2.line(image, (740, 150), (740, 220), (20, 20, 20), 3)
+    cv2.polylines(image, [np.asarray(points, np.int32)], True, (20, 20, 20), 3)
+    path = tmp_path / 'right-triangle.png'
+    cv2.imwrite(str(path), image)
+    assert len(detect(path, tmp_path).goal_candidates) == 1
 
 
 def test_real_photo_detects_black_flag_but_no_start(tmp_path):
@@ -88,3 +130,34 @@ def test_multiple_circles_and_flags_are_preserved_for_rejection(tmp_path):
     result = detect(tmp_path / 'drawing.png', tmp_path)
     assert len(result.start_candidates) == 2
     assert len(result.goal_candidates) == 2
+
+
+def test_real_hand_drawn_open_circle_and_filled_flag_are_detected(tmp_path):
+    source = Path(__file__).resolve().parents[1] / 'testdata/levels/real/hand-drawn-markers.jpg'
+    rectified = rectify(source, tmp_path)
+    result = detect(rectified.rectified_path, tmp_path)
+    assert len(result.start_candidates) == 1
+    assert len(result.goal_candidates) == 1
+    assert len(result.platform_candidates) >= 6
+    assert abs(result.start_candidates[0].x - 148) <= 8
+    assert abs(result.start_candidates[0].y - 182) <= 8
+    goal = result.goal_candidates[0].region
+    assert abs(goal.x - 800) <= 10 and abs(goal.y - 93) <= 10
+    assert goal.width >= 35 and goal.height >= 45
+
+
+def test_real_hand_drawn_photo_generates_level(tmp_path, monkeypatch):
+    from app.level_contracts import LevelReady
+    from app.services.level_parser import parse
+
+    for key in ('LEVEL_LLM_BASE_URL', 'LEVEL_LLM_API_KEY', 'LEVEL_LLM_MODEL'):
+        monkeypatch.delenv(key, raising=False)
+    source = Path(__file__).resolve().parents[1] / 'testdata/levels/real/hand-drawn-markers.jpg'
+    (tmp_path / 'input.png').write_bytes(source.read_bytes())
+
+    result = LevelReady.model_validate(parse(tmp_path))
+
+    assert result.result.analysis.playability == 'not_checked'
+    assert result.result.level.playerStart.source == 'detected'
+    assert result.result.level.goalRegion.x >= 750
+    assert result.result.level.goalRegion.width > 0

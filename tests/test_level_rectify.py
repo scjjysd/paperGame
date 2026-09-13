@@ -5,7 +5,7 @@ import cv2
 import numpy as np
 import pytest
 
-from app.services.level_rectify import RectifyIssue, order_corners, rectify
+from app.services.level_rectify import RectifyIssue, _reasonable_foreground, order_corners, rectify
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -163,3 +163,18 @@ def test_rectify_preserves_dim_synthetic_paper_detection(tmp_path):
     truth = json.loads((SAMPLES / 'sample-00.json').read_text(encoding='utf-8'))
     expected = order_corners(np.array([[p['x'], p['y']] for p in truth['paperCorners']]))
     assert _corner_error(result.corners, expected) <= 4
+
+
+def test_rectify_recovers_full_paper_under_uneven_lighting(tmp_path):
+    source = ROOT / 'testdata/levels/real/hand-drawn-markers.jpg'
+    result = rectify(source, tmp_path)
+    # 上半张纸比下半张亮，不能只把亮区误认为整张纸。
+    expected = np.array([[132, 76], [1176, 52], [1224, 815], [38, 830]])
+    assert _corner_error(result.corners, expected) <= 30
+
+
+def test_foreground_candidate_rejects_full_frame_background():
+    original = np.array([[120, 70], [1160, 55], [1160, 500], [100, 510]], np.float32)
+    full_frame = np.array([[0, 0], [1279, 0], [1279, 959], [0, 959]], np.float32)
+
+    assert not _reasonable_foreground(full_frame, original, (960, 1280))
