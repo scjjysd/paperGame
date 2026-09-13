@@ -47,7 +47,7 @@ services:
       # 镜像内不保证有 curl，用 python 标准库探活
       test:
         - CMD-SHELL
-        - python -c "import urllib.request as u; u.urlopen('http://localhost:8080/ping', timeout=3)" || exit 1
+        - python -c "import urllib.request as u; u.build_opener(u.ProxyHandler({})).open('http://localhost:8080/ping', timeout=3)" || exit 1
       interval: 10s
       timeout: 5s
       retries: 18        # 模型加载较慢，给足启动窗口
@@ -101,7 +101,7 @@ services:
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8000/healthz"]
+      test: ["CMD", "curl", "--noproxy", "*", "-sf", "http://localhost:8000/healthz"]
       interval: 10s
       timeout: 5s
       retries: 6

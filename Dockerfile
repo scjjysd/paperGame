@@ -1,14 +1,10 @@
 FROM python:3.9-slim
 
-# 构建时可通过 HTTP_PROXY/HTTPS_PROXY 访问外部软件源；为空时保持直连。
+# 代理只作为构建参数使用，不能通过 ENV 写入容器运行环境。
 ARG HTTP_PROXY
 ARG HTTPS_PROXY
 ARG http_proxy
 ARG https_proxy
-ENV HTTP_PROXY=${HTTP_PROXY} \
-    HTTPS_PROXY=${HTTPS_PROXY} \
-    http_proxy=${http_proxy} \
-    https_proxy=${https_proxy}
 
 # ============ 系统依赖 ============
 # opencv-python 需要 libgl1/libglib2.0-0；Mesa 软渲染需要 libosmesa6；socat 供 entrypoint 转发
