@@ -59,6 +59,21 @@ body {
   padding: 10px;
 }
 
+#build-time {
+  position: absolute;
+  z-index: 3;
+  left: calc(6px + env(safe-area-inset-left, 0px));
+  bottom: calc(4px + env(safe-area-inset-bottom, 0px));
+  padding: 2px 5px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.5);
+  color: #fff;
+  font: 10px/1.4 sans-serif;
+  white-space: nowrap;
+  pointer-events: none;
+  user-select: none;
+}
+
 #unity-warning .warning {
   background: #fff3a3;
 }
