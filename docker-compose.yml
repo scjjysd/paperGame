@@ -6,7 +6,9 @@
 #
 #   bash scripts/setup/setup-vendor.sh && docker compose up -d --build
 #   curl http://localhost:8080/ping             # {"status": "Healthy"}
-#   curl http://localhost:8000/healthz          # {"status":"ok"}
+#   curl http://localhost:8000/healthz        # {"status":"ok"}
+#   curl https://scjjysd.xyz:8443/healthz     # {"status":"ok"}
+#   Nginx 提供 HTTP/HTTPS；启动前放置 certs/fullchain.pem 和 certs/privkey.pem，详见 README。
 #
 # GPU 开关（单文件，环境变量控制）：
 #   默认不启用 GPU：docker compose up -d          ← 现阶段唯一可用配置
@@ -80,12 +82,21 @@ services:
         https_proxy: ${HTTPS_PROXY:-}
     image: paper-game/server:local
     container_name: pg-api
-    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    command:
+      - uvicorn
+      - app.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --proxy-headers
+      - --forwarded-allow-ips
+      - "*"
     environment:
       REDIS_URL: redis://redis:6379/0
       OUT_ROOT: /data/out
-      # 对外基址：响应里的 *Url 会拼上它。端口映射/反向代理下必须显式配置，
-      # 否则拿到的是容器内部 Host；留空则按请求 Host 推导。
+      # 留空时按请求协议和 Host（含外部端口）推导，兼容 HTTP 与 HTTPS 同时访问。
+      # 自动部署读取仓库外 nas.env；仅需固定统一地址时才设置此变量。
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
       # 跨域：默认放开所有来源（本地/内网联调）；要携带凭证就得配成具体来源
       CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-*}
@@ -93,8 +104,8 @@ services:
       # 日志：落 /data/out/logs（即宿主机 out/logs），文件名带日期；LOG_KEEP_DAYS=0 表示不清理
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_KEEP_DAYS: ${LOG_KEEP_DAYS:-0}
-    ports:
-      - "8000:8000"
+    # API 不发布宿主机端口，仅信任容器网络；外部请求统一由 Nginx 重写代理头。
+    # 不要在信任所有代理头的同时将 API 端口直接暴露到公网。
     volumes:
       - ./out:/data/out
       - ./webgl:/app/webgl:ro
@@ -103,6 +114,27 @@ services:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "--noproxy", "*", "-sf", "http://localhost:8000/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:1.28-alpine
+    container_name: pg-nginx
+    ports:
+      - "8000:80"
+      - "8443:443"
+    volumes:
+      - ./docker/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./certs:/certs:ro
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      # 校验两个入口都能代理至 API；仅内部 localhost 探活跳过证书域名验证。
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/healthz && wget --no-check-certificate -q -O /dev/null https://127.0.0.1/healthz"]
       interval: 10s
       timeout: 5s
       retries: 6

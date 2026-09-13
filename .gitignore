@@ -29,3 +29,6 @@ testdata/output/
 
 # 飞牛 NAS 本地部署工具
 /fnos/
+
+# HTTPS 证书与私钥仅保存在部署机器
+/certs/

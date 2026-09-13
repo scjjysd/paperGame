@@ -382,7 +382,9 @@ FPS 固定 12。帧尺寸取该角色**所有动作**帧内容包围盒的并集
 - **网络代理（本机实测必需）**：本机无法直连 docker.io，须在 Docker Desktop → Settings → Resources → Proxies 配置手动代理 `http://host.docker.internal:7890`（**不能用 `127.0.0.1`**，构建在 VM 内执行）；shell 里 `export all_proxy` 对守护进程无效。
 - 首次构建镜像约 5-7 分钟。
 
-### 8.2 起全栈（5 容器）
+### 8.2 起全栈（6 容器）
+
+Compose 通过 Nginx 同时提供 HTTP 8000 和 HTTPS 8443，启动前按下文准备 `certs/` 中的证书及私钥。
 
 ```bash
 bash scripts/setup/setup-vendor.sh          # 校验已随仓库提供的 AnimatedDrawings 源码
@@ -396,8 +398,8 @@ curl http://localhost:8000/healthz    # {"status":"ok"}
 将 Unity 导出的完整内容放入仓库根目录 `webgl/`，保持 `index.html`、`Build/`、
 `TemplateData/` 和可选的 `StreamingAssets/` 的相对路径。当前构建使用 gzip 压缩。
 
-- 本机访问：<http://localhost:8000/webgl/>；`/webgl` 会自动跳转到带斜杠的入口。
-- 局域网访问：`http://服务器IP:8000/webgl/`。
+- Docker 部署访问：<http://scjjysd.xyz:8000/webgl/> 或 <https://scjjysd.xyz:8443/webgl/>（启动前准备证书）。
+- 本地 Python 开发访问：<http://localhost:8000/webgl/>；`/webgl` 会自动跳转到带斜杠的入口。
 - 本地 Python 启动：`.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000`。
 - Docker 首次接入本次服务端修改：`docker compose up -d --build api`。
   API 容器只读挂载 `./webgl:/app/webgl:ro`，后续更新游戏只需完整替换该目录内容，
@@ -407,26 +409,87 @@ curl http://localhost:8000/healthz    # {"status":"ok"}
 `application/wasm`；`.unityweb` 保留 Unity loader 自行解压。页面与资源使用
 `Cache-Control: no-cache`，浏览器可缓存，但使用前需要重新校验版本。
 
-Unity API 基址应指向页面同源服务器。局域网或域名部署时，将 `PUBLIC_BASE_URL`
-设为浏览器可访问的服务地址（不带 `/webgl`），例如
-`PUBLIC_BASE_URL=http://192.168.1.20:8000 docker compose up -d api`，避免 API 返回
-指向浏览器本机 `localhost` 的产物链接。客户端若硬编码 API 地址，需要在 Unity 侧修改后重新导出。
+Unity API 基址应按页面同源推导（协议、域名和端口）。后端 `PUBLIC_BASE_URL` **默认留空**，
+按请求动态生成 API、预览和产物链接：HTTP 访问得到 HTTP 链接，HTTPS 访问得到 HTTPS 链接。
+Nginx 保留外部 Host（含端口），覆盖 `X-Forwarded-Proto`；Uvicorn 解析可信代理头。
+API 不发布宿主机端口，外部请求统一经过 Nginx，不能在信任所有代理头时直接暴露 API。
+客户端若硬编码 API 地址，仍需在 Unity 侧改为同源推导后重新导出；服务端变量不能修改编译产物。
 
-也可以在项目根目录 `.env` 中设置 `PUBLIC_BASE_URL=http://你的域名:8000`（纯 URL，
-不要写成 Markdown 链接）。留空时按请求 Host 推导。修改后需要重新创建 API 容器，
-`docker compose restart api` 不会重新加载环境变量；无需重新构建镜像：
-
-```bash
-docker compose up -d --no-deps --force-recreate api
-docker compose exec api printenv PUBLIC_BASE_URL
-```
-
-如果容器内仍是旧地址，检查启动 Compose 的 shell 是否设置了同名变量：shell 环境变量
-优先于 `.env`，可先执行 `unset PUBLIC_BASE_URL` 再运行上面的命令。
-本地直接运行 Uvicorn 不会自动加载 `.env`，应显式传入环境变量，例如
-`PUBLIC_BASE_URL=http://你的域名:8000 .venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000`。
+仅需要固定统一基址时才设置非空 `PUBLIC_BASE_URL`，显式配置始终优先于请求推导。
+普通 Compose 读取 `.env`，NAS 自动部署读取仓库外的 `nas.env`，shell 同名变量优先于二者。
+开发阶段在对应文件中删除该变量或设置 `PUBLIC_BASE_URL=`；进程环境也不能残留旧值。
+修改环境变量后需重新创建容器，`restart` 不会加载新环境配置。本地直接启动 Uvicorn
+不会自动读取 `.env`，未设置变量时也按当前请求推导。
 
 以后若切换为多线程构建，需要配套 HTTPS 和 COOP/COEP 跨源隔离配置。
+
+### 飞牛 NAS：同时使用 HTTP 与 HTTPS
+
+全部服务仍定义在原 `docker-compose.yml` 中，无需额外 Compose 文件：
+
+```text
+HTTP  :8000 → Nginx :80  ─┐
+                         ├→ API :8000（容器网络内 HTTP）
+HTTPS :8443 → Nginx :443 ─┘
+```
+
+HTTP 不强制跳转 HTTPS。API 健康检查保持 HTTP；Nginx 健康检查验证两个入口均能到达 API。
+HTTPS 证书由 Nginx 读取，API 不再挂载证书。访问端仍需支持 IPv6。
+
+1. 首次切换前暂停 NAS 自动更新任务。下载 **Nginx（pem/key）** 证书包，将完整证书链
+   重命名为 `fullchain.pem`，对应私钥重命名为 `privkey.pem`，放入 NAS 原项目目录：
+
+   ```text
+   /vol2/1000/paperGame/
+   ├── docker-compose.yml
+   ├── docker/nginx.conf
+   └── certs/
+       ├── fullchain.pem
+       └── privkey.pem
+   ```
+
+   中间证书若单独提供，按域名证书在前、中间证书在后的顺序拼入完整证书链。
+   `certs/` 已被 Git 和镜像构建忽略，不提交私钥。
+2. 在路由器及 NAS 防火墙中放行 **IPv6 TCP 8443**，保留原 8000 放行规则。
+   域名 AAAA/DDNS 沿用原配置；证书不绑定端口。
+3. 修改仓库外的 `/vol2/1000/paperGame-deploy/nas.env`，删除旧的基址或清空：
+
+   ```dotenv
+   PUBLIC_BASE_URL=
+   ```
+
+   保留其他配置。自定义 `--state-dir` 时编辑该目录的 `nas.env`。
+   已初始化后修改仓库内 `.env` 不会覆盖 `nas.env`；定时任务中的同名环境变量也需移除。
+4. 将本地 `fnos/nas_auto_deploy.py` 手动上传到 NAS 仓库外原脚本位置。
+   `fnos/` 被 Git 忽略，不会自动同步。新版脚本会保护 `certs/`，预先加载证书和私钥，
+   拉取 Nginx 镜像并执行 `nginx -t`，随后构建镜像、启动全部服务并等待 API 和 Nginx 健康。
+   校验或拉取失败时不重建现有容器；证书预检不验证域名、有效期和公网信任链。
+5. 将本次项目代码和配置修改提交并推送到脚本监听的远端分支，再手动运行原更新命令。
+   路径、分支和项目名沿用原部署（以下 `papergame` 仅为示例）：
+
+   ```bash
+   unset PUBLIC_BASE_URL
+   python3 /vol2/1000/paperGame-deploy/nas_auto_deploy.py \
+     --repo /vol2/1000/paperGame --branch main --project-name papergame
+   ```
+
+   `docker/nginx.conf` 必须一并提交。仅在 NAS 修改已跟踪文件会被下次同步覆盖。
+   服务更新可能短暂中断；原来直连 Uvicorn HTTPS 8000 的地址改用 HTTPS 8443。
+6. 外网 IPv6 验证（HTTPS 验证不能加 `-k`）：
+
+   ```bash
+   curl -6 --noproxy '*' http://scjjysd.xyz:8000/healthz
+   curl -6 --noproxy '*' https://scjjysd.xyz:8443/healthz
+   ```
+
+   两者均应返回 `{"status":"ok"}`。分别打开
+   <http://scjjysd.xyz:8000/webgl/> 和 <https://scjjysd.xyz:8443/webgl/>，
+   检查上传、轮询及资源加载；HTTPS 页面不应请求 HTTP 资源。验证成功后恢复定时任务。
+
+证书续期后替换 `certs/` 内两个文件，执行 `docker exec pg-nginx nginx -t` 验证，
+通过后执行 `docker exec pg-nginx nginx -s reload` 加载新证书，不需要重启 API。
+无代码更新时自动脚本会跳过部署，不会自动续期或加载新证书。
+手动 Compose 更新也应沿用项目名和 `--env-file` 指向仓库外 `nas.env`。
 
 ### 8.3 端到端冒烟
 

@@ -3,8 +3,9 @@
 产物与状态 URL 在磁盘快照（result.json）里始终存相对路径：它跨机器、跨端口都成立，
 换成绝对地址后一旦部署地址变更，历史任务里的链接就全部失效。因此只在响应出口补全：
 
-- 基址优先取 ``PUBLIC_BASE_URL``（反向代理/容器端口映射下必须显式配置，否则拿到的是内部地址）；
-- 未配置时用请求的 Host 推导，本地直连即 ``http://localhost:8000``。
+- 基址优先取 ``PUBLIC_BASE_URL``，仅在需要固定统一地址时设置；
+- 未配置时按请求协议和 Host（含外部端口）推导。Nginx 保留 Host 并覆盖转发协议头，
+  Uvicorn 在可信容器网络中解析代理头，因此 HTTP/HTTPS 会各自生成同源链接。
 """
 import os
 from typing import Any, Optional

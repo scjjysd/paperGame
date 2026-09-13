@@ -20,3 +20,5 @@ C1Levels/
 *.md
 .mcp.json
 .DS_Store
+# HTTPS 证书由运行时只读挂载，不发送到镜像构建上下文
+certs/
