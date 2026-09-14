@@ -7,98 +7,296 @@
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <link rel="apple-touch-icon" href="TemplateData/favicon.ico">
     <link rel="manifest" href="manifest.json">
     <title>PaperGame</title>
     <link rel="stylesheet" href="TemplateData/style.css">
+    <style>
+      /* ─ 添加到桌面引导遮罩（非 standalone 时显示） ── */
+      #install-overlay {
+        display: none;
+        position: fixed;
+        top: 0; left: 0; right: 0; bottom: 0;
+        z-index: 9999999;
+        background: linear-gradient(160deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+        color: #fff;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 32px 24px;
+        font: 17px/1.7 -apple-system, "Helvetica Neue", sans-serif;
+        text-align: center;
+        user-select: none;
+        -webkit-user-select: none;
+        box-sizing: border-box;
+      }
+      #install-overlay .logo {
+        font-size: 56px;
+        margin-bottom: 12px;
+      }
+      #install-overlay h2 {
+        font-size: 22px;
+        font-weight: 700;
+        margin: 0 0 8px;
+        letter-spacing: .5px;
+      }
+      #install-overlay .subtitle {
+        font-size: 14px;
+        color: rgba(255,255,255,.55);
+        margin: 0 0 28px;
+      }
+      #install-overlay .steps {
+        text-align: left;
+        background: rgba(255,255,255,.07);
+        border-radius: 16px;
+        padding: 20px 24px;
+        max-width: 340px;
+        width: 100%;
+        box-sizing: border-box;
+      }
+      #install-overlay .step {
+        display: flex;
+        align-items: flex-start;
+        gap: 14px;
+        margin-bottom: 18px;
+        font-size: 15px;
+        line-height: 1.5;
+      }
+      #install-overlay .step:last-child { margin-bottom: 0; }
+      #install-overlay .step-num {
+        flex-shrink: 0;
+        width: 28px; height: 28px;
+        border-radius: 50%;
+        background: rgba(255,255,255,.15);
+        display: flex; align-items: center; justify-content: center;
+        font-size: 14px; font-weight: 700;
+        margin-top: 1px;
+      }
+      #install-overlay .step-text { flex: 1; }
+      #install-overlay .step-text em {
+        font-style: normal;
+        background: rgba(255,255,255,.12);
+        padding: 1px 7px;
+        border-radius: 5px;
+        font-weight: 600;
+      }
+      #install-overlay .install-btn {
+        display: none;
+        margin-top: 24px;
+        padding: 14px 48px;
+        border: none;
+        border-radius: 28px;
+        background: #fff;
+        color: #1a1a2e;
+        font: bold 17px/1 -apple-system, "Helvetica Neue", sans-serif;
+        cursor: pointer;
+        -webkit-tap-highlight-color: transparent;
+      }
+      #install-overlay .install-btn:active {
+        transform: scale(.96);
+      }
+      #install-overlay .arrow-hint {
+        margin-top: 24px;
+        font-size: 13px;
+        color: rgba(255,255,255,.4);
+      }
+
+      /* ── 竖屏旋转提示（standalone 模式下竖屏时显示） ── */
+      #rotate-overlay {
+        display: none;
+        position: fixed;
+        top: 0; left: 0; right: 0; bottom: 0;
+        z-index: 999998;
+        background: #000;
+        color: #fff;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        font: 20px/1.6 -apple-system, "Helvetica Neue", sans-serif;
+        text-align: center;
+        user-select: none;
+        -webkit-user-select: none;
+      }
+      #rotate-overlay .icon {
+        font-size: 64px;
+        margin-bottom: 24px;
+        animation: rotate-hint 2s ease-in-out infinite;
+      }
+      @keyframes rotate-hint {
+        0%, 100% { transform: rotate(0deg); }
+        50% { transform: rotate(90deg); }
+      }
+      @media (orientation: portrait) {
+        #rotate-overlay { display: flex !important; }
+        #unity-container, #fullscreen-btn { display: none !important; }
+      }
+    </style>
   </head>
   <body>
+    <!-- 添加到桌面引导 -->
+    <div id="install-overlay">
+      <div class="logo">🎮</div>
+      <h2>添加到主屏幕后开始游戏</h2>
+      <p class="subtitle">本游戏需要全屏横屏体验，请先添加到桌面</p>
+      <div class="steps" id="install-steps"></div>
+      <button class="install-btn" id="install-btn">安装到桌面</button>
+      <div class="arrow-hint" id="install-hint">添加后从桌面图标打开即可</div>
+    </div>
+
+    <!-- 横屏提示 -->
+    <div id="rotate-overlay">
+      <div class="icon">📱</div>
+      <div>请横屏使用</div>
+    </div>
+
     <div id="unity-container">
       <canvas id="unity-canvas" tabindex="-1"></canvas>
       <div id="unity-loading-bar">
         <div id="unity-progress-bar-full"></div>
       </div>
       <div id="unity-warning"></div>
-      <div id="build-time">出包时间：2026-09-14 20:23:52 UTC+8</div>
+      <div id="build-time">出包时间：2026-09-14 21:10:22 UTC+8</div>
     </div>
     <button id="fullscreen-btn" onclick="enterFullscreen()">全屏</button>
+
     <script>
-      var canvas = document.querySelector("#unity-canvas");
-      var loadingBar = document.querySelector("#unity-loading-bar");
-      var progressBarFull = document.querySelector("#unity-progress-bar-full");
-      var warningBanner = document.querySelector("#unity-warning");
-      var fullscreenBtn = document.getElementById("fullscreen-btn");
+      /* ─ 提前拦截 Android 安装提示事件 ── */
+      var deferredPrompt = null;
+      window.addEventListener("beforeinstallprompt", function (e) {
+        e.preventDefault();
+        deferredPrompt = e;
+      });
 
-      function unityShowBanner(message, type) {
-        var item = document.createElement("div");
-        item.textContent = message;
-        item.className = type === "error" ? "error" : "warning";
-        warningBanner.appendChild(item);
+      /* ── 检测是否 standalone（已添加到桌面） ─ */
+      var isStandalone = window.matchMedia("(display-mode: standalone)").matches
+                      || window.navigator.standalone === true;
 
-        if (type !== "error") {
-          setTimeout(function () {
-            item.remove();
-          }, 5000);
+      if (!isStandalone) {
+        /* 非桌面模式 → 显示引导，不加载游戏 */
+        document.getElementById("install-overlay").style.display = "flex";
+
+        var isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+        var stepsEl = document.getElementById("install-steps");
+        var installBtn = document.getElementById("install-btn");
+        var installHint = document.getElementById("install-hint");
+
+        if (isIOS) {
+          /* iOS 无 API，只能手动操作 */
+          stepsEl.innerHTML = [
+            '<div class="step"><span class="step-num">1</span><span class="step-text">点击浏览器底部 <em>分享按钮</em>（方框带向上箭头）</span></div>',
+            '<div class="step"><span class="step-num">2</span><span class="step-text">向下滑动，找到并点击 <em>"添加到主屏幕"</em></span></div>',
+            '<div class="step"><span class="step-num">3</span><span class="step-text">点击右上角 <em>"添加"</em> 确认</span></div>'
+          ].join("");
+        } else {
+          /* Android：尝试用 beforeinstallprompt 一键安装 */
+          function showInstallButton() {
+            stepsEl.style.display = "none";
+            installBtn.style.display = "inline-block";
+            installHint.textContent = "点击后按提示确认即可";
+          }
+          function showFallbackSteps() {
+            stepsEl.innerHTML = [
+              '<div class="step"><span class="step-num">1</span><span class="step-text">点击浏览器右上角 <em>⋮ 菜单</em></span></div>',
+              '<div class="step"><span class="step-num">2</span><span class="step-text">点击 <em>"添加到主屏幕"</em> 或 <em>"安装应用"</em></span></div>',
+              '<div class="step"><span class="step-num">3</span><span class="step-text">点击 <em>"添加"</em> 确认</span></div>'
+            ].join("");
+          }
+
+          if (deferredPrompt) {
+            showInstallButton();
+          } else {
+            var timer = setTimeout(showFallbackSteps, 2000);
+            var checkInterval = setInterval(function () {
+              if (deferredPrompt) {
+                clearTimeout(timer);
+                clearInterval(checkInterval);
+                showInstallButton();
+              }
+            }, 200);
+          }
+
+          installBtn.addEventListener("click", function () {
+            if (!deferredPrompt) return;
+            deferredPrompt.prompt();
+            deferredPrompt.userChoice.then(function (choice) {
+              deferredPrompt = null;
+              if (choice.outcome === "accepted") {
+                installBtn.textContent = "已添加 ✓";
+                installBtn.disabled = true;
+                installBtn.style.opacity = ".5";
+              } else {
+                showFallbackSteps();
+                installBtn.style.display = "none";
+              }
+            });
+          });
         }
-      }
-
-      /* 全屏：用户点击触发，HTTPS/localhost 下生效 */
-      function enterFullscreen() {
-        var el = document.documentElement;
-        var fn = el.requestFullscreen || el.webkitRequestFullscreen || el.msRequestFullscreen;
-        if (fn) {
-          fn.call(el).catch(function () {});
-        }
+      } else {
+        /* ─ standalone 模式 → 正常加载游戏 ─ */
+        var canvas = document.querySelector("#unity-canvas");
+        var loadingBar = document.querySelector("#unity-loading-bar");
+        var progressBarFull = document.querySelector("#unity-progress-bar-full");
+        var warningBanner = document.querySelector("#unity-warning");
+        var fullscreenBtn = document.getElementById("fullscreen-btn");
         fullscreenBtn.style.display = "none";
-      }
 
-      /* 横屏锁定 */
-      (function () {
-        var locked = false;
-        function lockLandscape() {
-          if (locked) return;
-          var so = screen.orientation;
-          if (so && so.lock) {
-            so.lock("landscape").catch(function () {});
-            locked = true;
+        function unityShowBanner(message, type) {
+          var item = document.createElement("div");
+          item.textContent = message;
+          item.className = type === "error" ? "error" : "warning";
+          warningBanner.appendChild(item);
+          if (type !== "error") {
+            setTimeout(function () { item.remove(); }, 5000);
           }
         }
-        ["click", "touchstart"].forEach(function (evt) {
-          document.addEventListener(evt, function () { lockLandscape(); }, { once: true, passive: true });
-        });
-      })();
 
-      /* PWA standalone 模式下隐藏全屏按钮（已经无地址栏了） */
-      if (window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone) {
-        fullscreenBtn.style.display = "none";
+        function enterFullscreen() {
+          var el = document.documentElement;
+          var fn = el.requestFullscreen || el.webkitRequestFullscreen || el.msRequestFullscreen;
+          if (fn) { fn.call(el).catch(function () {}); }
+          fullscreenBtn.style.display = "none";
+        }
+
+        /* Android 横屏 API 锁定 */
+        (function () {
+          var locked = false;
+          function lockLandscape() {
+            if (locked) return;
+            var so = screen.orientation;
+            if (so && so.lock) { so.lock("landscape").catch(function () {}); locked = true; }
+          }
+          ["click", "touchstart"].forEach(function (evt) {
+            document.addEventListener(evt, function () { lockLandscape(); }, { once: true, passive: true });
+          });
+        })();
+
+        var buildUrl = "Build";
+        var loaderUrl = buildUrl + "/C1WebGL.loader.js";
+        var config = {
+          dataUrl: buildUrl + "/C1WebGL.data.gz?v=1",
+          frameworkUrl: buildUrl + "/C1WebGL.framework.js.gz?v=1",
+          codeUrl: buildUrl + "/C1WebGL.wasm.gz?v=1",
+          streamingAssetsUrl: "StreamingAssets",
+          companyName: "DefaultCompany",
+          productName: "PaperGame",
+          productVersion: "0.1",
+          showBanner: unityShowBanner
+        };
+
+        loadingBar.style.display = "block";
+        var script = document.createElement("script");
+        script.src = loaderUrl;
+        script.onload = function () {
+          createUnityInstance(canvas, config, function (progress) {
+            progressBarFull.style.width = (progress * 100) + "%";
+          }).then(function () {
+            loadingBar.style.display = "none";
+          }).catch(function (message) {
+            unityShowBanner(message, "error");
+          });
+        };
+        document.body.appendChild(script);
       }
-
-      var buildUrl = "Build";
-      var loaderUrl = buildUrl + "/C1WebGL.loader.js";
-      var config = {
-        dataUrl: buildUrl + "/C1WebGL.data.gz",
-        frameworkUrl: buildUrl + "/C1WebGL.framework.js.gz",
-        codeUrl: buildUrl + "/C1WebGL.wasm.gz",
-        streamingAssetsUrl: "StreamingAssets",
-        companyName: "DefaultCompany",
-        productName: "PaperGame",
-        productVersion: "0.1",
-        showBanner: unityShowBanner
-      };
-
-      loadingBar.style.display = "block";
-
-      var script = document.createElement("script");
-      script.src = loaderUrl;
-      script.onload = function () {
-        createUnityInstance(canvas, config, function (progress) {
-          progressBarFull.style.width = (progress * 100) + "%";
-        }).then(function () {
-          loadingBar.style.display = "none";
-        }).catch(function (message) {
-          unityShowBanner(message, "error");
-        });
-      };
-      document.body.appendChild(script);
     </script>
   </body>
 </html>
