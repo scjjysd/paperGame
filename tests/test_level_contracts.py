@@ -57,6 +57,14 @@ def test_visible_canvas_jobs_do_not_reuse_old_marker_cache():
     assert derive_level_job_id(b'image', DEFAULT_PLAYABILITY_PROFILE) != 'level_' + old_digest[:12]
 
 
+def test_geometry_v3_jobs_do_not_reuse_v2_cache():
+    import hashlib
+    expected_digest = hashlib.sha256(b'image' + canonical_profile_json(DEFAULT_PLAYABILITY_PROFILE)
+                                     + ALGORITHM_MAJOR_VERSION.encode('ascii')
+                                     + b':explicit-markers-v3').hexdigest()
+    assert derive_level_job_id(b'image', DEFAULT_PLAYABILITY_PROFILE) == 'level_' + expected_digest[:12]
+
+
 def test_ready_contract_accepts_skipped_playability():
     import json
     payload = json.loads((FIXTURES / 'ready.json').read_text())
@@ -88,6 +96,60 @@ def test_level_requires_fixed_coordinate_system_and_platform():
         Level.model_validate({**data, 'coordinateSystem': {**data['coordinateSystem'], 'unit': 'world'}})
     with pytest.raises(ValidationError):
         Level.model_validate({**data, 'platforms': []})
+
+
+def test_level_defaults_walls_and_blocks_to_empty_lists():
+    level = Level.model_validate(_level_data())
+    assert level.walls == []
+    assert level.blocks == []
+
+
+def test_level_accepts_valid_walls_and_blocks():
+    data = _level_data()
+    data['walls'] = [{
+        'id': 'wall_001',
+        'start': {'x': 50, 'y': 10},
+        'end': {'x': 52, 'y': 60},
+        'confidence': 0.8,
+    }]
+    data['blocks'] = [{
+        'id': 'block_001',
+        'region': {'x': 60, 'y': 40, 'width': 20, 'height': 15, 'confidence': 0.7},
+    }]
+
+    level = Level.model_validate(data)
+
+    assert level.walls[0].id == 'wall_001'
+    assert level.blocks[0].region.width == 20
+
+
+@pytest.mark.parametrize('wall', [
+    {'id': 'wall_001', 'start': {'x': 50, 'y': 10}, 'end': {'x': 50, 'y': 10}, 'confidence': 0.8},
+    {'id': 'wall_001', 'start': {'x': 10, 'y': 20}, 'end': {'x': 60, 'y': 22}, 'confidence': 0.8},
+    {'id': 'wall_001', 'start': {'x': 50, 'y': 10}, 'end': {'x': 50, 'y': 80}, 'confidence': 0.8},
+])
+def test_level_rejects_invalid_wall_geometry(wall):
+    with pytest.raises(ValidationError):
+        Level.model_validate({**_level_data(), 'walls': [wall]})
+
+
+@pytest.mark.parametrize('region', [
+    {'x': 60, 'y': 40, 'width': 0, 'height': 15, 'confidence': 0.7},
+    {'x': 90, 'y': 40, 'width': 20, 'height': 15, 'confidence': 0.7},
+])
+def test_level_rejects_invalid_block_region(region):
+    block = {'id': 'block_001', 'region': region}
+    with pytest.raises(ValidationError):
+        Level.model_validate({**_level_data(), 'blocks': [block]})
+
+
+@pytest.mark.parametrize('geometry_field,geometry', [
+    ('walls', {'id': 'platform_001', 'start': {'x': 50, 'y': 10}, 'end': {'x': 50, 'y': 60}, 'confidence': 0.8}),
+    ('blocks', {'id': 'platform_001', 'region': {'x': 60, 'y': 40, 'width': 20, 'height': 15, 'confidence': 0.7}}),
+])
+def test_level_rejects_ids_reused_across_geometry_types(geometry_field, geometry):
+    with pytest.raises(ValidationError):
+        Level.model_validate({**_level_data(), geometry_field: [geometry]})
 
 def test_level_rejects_duplicate_ids_bad_order_zero_length_and_outside_goal():
     data = _level_data()

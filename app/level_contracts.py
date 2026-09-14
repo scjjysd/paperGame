@@ -116,6 +116,18 @@ class Platform(ContractModel):
     confidence: float = Field(ge=0, le=1)
 
 
+class Wall(ContractModel):
+    id: str = Field(min_length=1)
+    start: Point
+    end: Point
+    confidence: float = Field(ge=0, le=1)
+
+
+class Block(ContractModel):
+    id: str = Field(min_length=1)
+    region: Region
+
+
 class Level(ContractModel):
     schemaVersion: Literal[SCHEMA_VERSION]
     coordinateSystem: CoordinateSystem
@@ -123,6 +135,8 @@ class Level(ContractModel):
     background: Background
     playerStart: PlayerStart
     platforms: List[Platform] = Field(min_length=1)
+    walls: List[Wall] = Field(default_factory=list)
+    blocks: List[Block] = Field(default_factory=list)
     goalRegion: Region
 
     @model_validator(mode='after')
@@ -140,9 +154,11 @@ class Level(ContractModel):
         if self.goalRegion.x + self.goalRegion.width > self.canvas.width or self.goalRegion.y + self.goalRegion.height > self.canvas.height:
             raise ValueError('goalRegion must be fully inside canvas')
 
-        ids = [platform.id for platform in self.platforms]
+        ids = ([platform.id for platform in self.platforms]
+               + [wall.id for wall in self.walls]
+               + [block.id for block in self.blocks])
         if len(ids) != len(set(ids)):
-            raise ValueError('platform ids must be unique')
+            raise ValueError('platform, wall and block ids must be unique')
         for platform in self.platforms:
             if platform.start.x > platform.end.x:
                 raise ValueError('platform start.x must be <= end.x')
@@ -150,6 +166,17 @@ class Level(ContractModel):
                 raise ValueError('platform must not have zero length')
             if not inside(platform.start) or not inside(platform.end):
                 raise ValueError('platform endpoints must be inside canvas')
+        for wall in self.walls:
+            if wall.start == wall.end:
+                raise ValueError('wall must not have zero length')
+            if abs(wall.end.y - wall.start.y) <= abs(wall.end.x - wall.start.x):
+                raise ValueError('wall must be primarily vertical')
+            if not inside(wall.start) or not inside(wall.end):
+                raise ValueError('wall endpoints must be inside canvas')
+        for block in self.blocks:
+            region = block.region
+            if region.x + region.width > self.canvas.width or region.y + region.height > self.canvas.height:
+                raise ValueError('block region must be fully inside canvas')
         return self
 
 
@@ -273,7 +300,7 @@ def canonical_profile_json(profile: PlayabilityProfile) -> bytes:
 
 
 def derive_level_job_id(content: bytes, profile: PlayabilityProfile) -> str:
-    # v2 增加纸边不可见降级与手绘标记抗干扰，不复用旧识别结果。
+    # v3 增加墙与实体几何，不复用旧识别结果。
     digest = hashlib.sha256(content + canonical_profile_json(profile) + ALGORITHM_MAJOR_VERSION.encode('ascii')
-                            + b':explicit-markers-v2').hexdigest()
+                            + b':explicit-markers-v3').hexdigest()
     return 'level_' + digest[:12]
