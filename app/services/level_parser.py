@@ -250,19 +250,11 @@ def parse(job_dir: Path, progress: Progress = None,
         rectified = level_rectify.rectify(input_path, job_dir)
     except level_rectify.RectifyIssue as issue:
         logger.warning('关卡任务 %s 纸张拉正失败：%s（%s）', job_id, issue.reason, issue)
-        if issue.reason == 'PAPER_OCCLUDED' and not issue.candidates:
-            rectified = level_rectify.normalize_visible_canvas(input_path, job_dir)
-            visible_fallback = True
-            logger.info('关卡任务 %s 改用可见画面中心安全区继续识别', job_id)
-        else:
-            review_image = job_dir / 'rectified.png'
-            if not review_image.exists():
-                _atomic_bytes(review_image, input_path.read_bytes())
-            _publish_review_artifacts(job_dir, issue.reason, (), review_image, progress)
-            image = cv2.imread(str(review_image), cv2.IMREAD_COLOR)
-            height, width = image.shape[:2]
-            return _review_payload(job_dir, issue.reason, issue.candidates,
-                                   width, height, created, updated)
+        # 前端限制框已经给出可信的关卡范围；纸张检测/拉正只是可选增强，
+        # 任一拉正失败都降级使用框内可见画面，不再作为生成门禁。
+        rectified = level_rectify.normalize_visible_canvas(input_path, job_dir)
+        visible_fallback = True
+        logger.info('关卡任务 %s 改用可见画面中心安全区继续识别', job_id)
     logger.info('关卡任务 %s 纸张拉正完成：画布 %dx%d', job_id, rectified.width, rectified.height)
     _stage(progress, 'detecting_platforms')
     detection = level_detect.detect(rectified.rectified_path, job_dir)
@@ -275,7 +267,8 @@ def parse(job_dir: Path, progress: Progress = None,
                  if rectified.width * .05 < goal.region.x + goal.region.width / 2
                  < rectified.width * .95
                  and rectified.height * .05 < goal.region.y + goal.region.height / 2
-                 < rectified.height * .95]
+                 < rectified.height * .95
+                 and goal.region.height <= rectified.height * .15]
         detection = replace(detection, start_candidates=starts, goal_candidates=goals)
     _stage(progress, 'detecting_goal')
     _stage(progress, 'semantic_review')

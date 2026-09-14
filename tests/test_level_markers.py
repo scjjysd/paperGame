@@ -194,3 +194,17 @@ def test_real_photo_without_four_visible_paper_edges_generates_level(
     assert abs(result.result.level.goalRegion.x - goal_x) <= 10
     assert result.result.level.goalRegion.width > 0
     assert len(result.result.level.platforms) == platform_count
+
+
+def test_image_without_edges_or_markers_fails_for_missing_markers(tmp_path, monkeypatch):
+    from app.level_contracts import LevelFailed
+    from app.services.level_parser import parse
+
+    for key in ('LEVEL_LLM_BASE_URL', 'LEVEL_LLM_API_KEY', 'LEVEL_LLM_MODEL'):
+        monkeypatch.delenv(key, raising=False)
+    cv2.imwrite(str(tmp_path / 'input.png'), np.full((720, 1080, 3), 180, np.uint8))
+
+    result = LevelFailed.model_validate(parse(tmp_path))
+
+    assert result.error.code == 'START_AND_GOAL_NOT_FOUND'
+    assert not result.error.retryable

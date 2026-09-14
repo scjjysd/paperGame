@@ -153,35 +153,17 @@ def test_review_removes_previous_authoritative_level(tmp_path, parser_stubs):
 
 @pytest.mark.parametrize('reason', [
     'PAPER_NOT_FOUND', 'PAPER_AMBIGUOUS', 'PAPER_OCCLUDED', 'ORIENTATION_AMBIGUOUS'])
-def test_rectify_review_reasons_never_publish_level(tmp_path, parser_stubs, reason):
+def test_rectify_failures_fall_back_to_visible_canvas(tmp_path, parser_stubs, reason):
     from app.services.level_parser import parse
 
     parser_stubs['rectify_issue'] = reason
     payload = parse(tmp_path, progress=parser_stubs['progress'])
 
-    assert payload['status'] == 'needs_review'
-    assert payload['review']['reason'] == reason
-    assert not (tmp_path / 'level.json').exists()
+    assert payload['status'] == 'ready'
+    assert (tmp_path / 'level.json').exists()
     assert (tmp_path / 'overlay.png').exists()
     assert (tmp_path / 'analysis.json').exists()
     assert parser_stubs['stages'][-1] == 'publishing_artifacts'
-
-
-def test_visible_canvas_fallback_rejection_returns_review_instead_of_crashing(tmp_path, monkeypatch):
-    from app.services import level_parser
-    from app.services.level_parser import parse
-
-    image = np.full((960, 1280, 3), (180, 80, 30), np.uint8)
-    cv2.imwrite(str(tmp_path / 'input.png'), image)
-
-    def occluded(*_args, **_kwargs):
-        raise RectifyIssue('PAPER_OCCLUDED', [])
-
-    monkeypatch.setattr(level_parser.level_rectify, 'rectify', occluded)
-    payload = parse(tmp_path)
-
-    assert payload['status'] == 'needs_review'
-    assert payload['review']['reason'] == 'PAPER_NOT_FOUND'
 
 
 @pytest.mark.parametrize('case, reason', [

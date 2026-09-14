@@ -332,14 +332,6 @@ def normalize_visible_canvas(input_path: Path, job_dir: Path) -> RectifyResult:
         crop_height = int(round(width / target_aspect))
         left, top = 0, (height - crop_height) // 2
         right, bottom = width - 1, top + crop_height - 1
-    crop = image[top:bottom + 1, left:right + 1]
-    crop_height, crop_width = crop.shape[:2]
-    center = crop[int(crop_height * .12):int(crop_height * .88),
-                  int(crop_width * .08):int(crop_width * .92)]
-    hsv = cv2.cvtColor(center, cv2.COLOR_BGR2HSV)
-    paper_like = (hsv[:, :, 1] < 55) & (hsv[:, :, 2] > 100)
-    if float(np.mean(paper_like)) < .72:
-        raise RectifyIssue('PAPER_NOT_FOUND', message='画面中心缺少足够的浅色低饱和纸面。')
     corners = np.array([[left, top], [right, top], [right, bottom], [left, bottom]], np.float32)
     destination = np.array([[0, 0], [899, 0], [899, 559], [0, 559]], np.float32)
     matrix = cv2.getPerspectiveTransform(corners, destination)

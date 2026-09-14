@@ -173,8 +173,7 @@ def detect_markers(image):
         if (len(polygon) >= 6 and .7 <= w / h <= 1.4 and circularity >= .63
                 and _looks_circular(mask, region)):
             circles.append(region)
-    flags = [flag for flag in _distinct(flags)
-             if min(mask.shape) * .07 <= flag[3] <= min(mask.shape) * .15]
+    flags = [flag for flag in _distinct(flags) if flag[3] >= min(mask.shape) * .07]
     circles = [circle for circle in _distinct(circles)
                if not any(_overlap_ratio(circle, flag) >= .25 for flag in flags)
                and _looks_like_pen_ink(image, mask, circle)]

@@ -5,8 +5,7 @@ import cv2
 import numpy as np
 import pytest
 
-from app.services.level_rectify import (RectifyIssue, _reasonable_foreground,
-                                        normalize_visible_canvas, order_corners, rectify)
+from app.services.level_rectify import RectifyIssue, _reasonable_foreground, order_corners, rectify
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -179,15 +178,3 @@ def test_foreground_candidate_rejects_full_frame_background():
     full_frame = np.array([[0, 0], [1279, 0], [1279, 959], [0, 959]], np.float32)
 
     assert not _reasonable_foreground(full_frame, original, (960, 1280))
-
-
-def test_visible_canvas_fallback_rejects_colored_display(tmp_path):
-    image = np.full((960, 1280, 3), (180, 80, 30), np.uint8)
-    cv2.rectangle(image, (100, 100), (1180, 860), (30, 150, 210), -1)
-    input_path = tmp_path / 'display.png'
-    cv2.imwrite(str(input_path), image)
-
-    with pytest.raises(RectifyIssue) as raised:
-        normalize_visible_canvas(input_path, tmp_path / 'out')
-
-    assert raised.value.reason == 'PAPER_NOT_FOUND'

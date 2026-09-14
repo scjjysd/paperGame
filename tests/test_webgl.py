@@ -1,5 +1,6 @@
 """WebGL 浏览器加载契约：入口、预压缩资源、缓存校验和静态目录边界。"""
 import gzip
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -86,3 +87,14 @@ def test_api_starts_without_webgl_build(tmp_path, monkeypatch):
     with TestClient(main.create_app()) as client:
         assert client.get('/healthz').status_code == 200
         assert client.get('/webgl/').status_code == 404
+
+
+def test_mobile_template_keeps_unity_visible_in_portrait_orientation():
+    server_root = Path(__file__).resolve().parents[1]
+    index_html = (server_root / 'webgl' / 'index.html').read_text()
+    stylesheet = (server_root / 'webgl' / 'TemplateData' / 'style.css').read_text()
+
+    assert '#rotate-overlay' not in index_html
+    assert 'unityContainer.style.display = "none"' not in index_html
+    assert '@media (orientation: portrait)' in stylesheet
+    assert 'transform: rotate(90deg)' in stylesheet
