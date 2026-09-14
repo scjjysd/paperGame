@@ -78,6 +78,15 @@ def test_large_open_circle_is_detected_without_becoming_flag(tmp_path):
     assert not result.goal_candidates
 
 
+def test_circle_with_eighty_degree_gap_is_detected(tmp_path):
+    image = drawing(circle=False, flag=False)
+    cv2.ellipse(image, (140, 350), (32, 32), 0, 40, 320, (20, 20, 20), 4)
+    path = tmp_path / 'open-circle.png'
+    cv2.imwrite(str(path), image)
+    result = detect(path, tmp_path)
+    assert len(result.start_candidates) == 1
+
+
 @pytest.mark.parametrize('points', [
     [[740, 150], [780, 150], [740, 185]],
     [[740, 150], [780, 185], [740, 185]],
@@ -161,3 +170,27 @@ def test_real_hand_drawn_photo_generates_level(tmp_path, monkeypatch):
     assert result.result.level.playerStart.source == 'detected'
     assert result.result.level.goalRegion.x >= 750
     assert result.result.level.goalRegion.width > 0
+
+
+@pytest.mark.parametrize('filename,start_x,goal_x,platform_count', [
+    ('cropped-paper-markers.jpg', 82, 808, 15),
+    ('rolled-page-markers.jpg', 199, 690, 9),
+])
+def test_real_photo_without_four_visible_paper_edges_generates_level(
+        tmp_path, monkeypatch, filename, start_x, goal_x, platform_count):
+    from app.level_contracts import LevelReady
+    from app.services.level_parser import parse
+
+    for key in ('LEVEL_LLM_BASE_URL', 'LEVEL_LLM_API_KEY', 'LEVEL_LLM_MODEL'):
+        monkeypatch.delenv(key, raising=False)
+    source = Path(__file__).resolve().parents[1] / 'testdata/levels/real' / filename
+    (tmp_path / 'input.png').write_bytes(source.read_bytes())
+
+    result = LevelReady.model_validate(parse(tmp_path))
+
+    assert result.result.analysis.playability == 'not_checked'
+    assert result.result.level.playerStart.source == 'detected'
+    assert abs(result.result.level.playerStart.x - start_x) <= 10
+    assert abs(result.result.level.goalRegion.x - goal_x) <= 10
+    assert result.result.level.goalRegion.width > 0
+    assert len(result.result.level.platforms) == platform_count

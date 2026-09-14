@@ -38,6 +38,17 @@ def _looks_circular(mask, region):
     return coverage >= .78 and radial_error <= .055 and radial_spread <= .105
 
 
+def _looks_like_pen_ink(image, mask, region):
+    """保留黑笔或深色彩笔，排除浅色高饱和度印刷 Logo/字母。"""
+    x, y, w, h = region
+    ink = mask[y:y + h, x:x + w] > 0
+    if not ink.any():
+        return False
+    gray = cv2.cvtColor(image[y:y + h, x:x + w], cv2.COLOR_BGR2GRAY)[ink]
+    saturation = cv2.cvtColor(image[y:y + h, x:x + w], cv2.COLOR_BGR2HSV)[:, :, 1][ink]
+    return np.percentile(saturation, 75) <= 80 or np.median(gray) < 85
+
+
 def _hough_circles(gray, mask):
     short = min(gray.shape)
     blurred = cv2.medianBlur(gray, 5)
@@ -98,7 +109,7 @@ def _pole_flags(mask):
     for x1, y1, x2, y2 in lines.reshape(-1, 4):
         length = float(np.hypot(x2 - x1, y2 - y1))
         angle = abs(float(np.degrees(np.arctan2(y2 - y1, x2 - x1))))
-        if abs(angle - 90) > 12 or length < short * .07 or length > short * .35:
+        if abs(angle - 90) > 12 or length < short * .055 or length > short * .35:
             continue
         top, bottom = min(y1, y2), max(y1, y2)
         pole_x = int(round((x1 + x2) / 2))
@@ -159,10 +170,12 @@ def detect_markers(image):
         polygon = cv2.approxPolyDP(contour, .035 * perimeter, True)
         circularity = 4 * np.pi * area / perimeter ** 2
         region = (x, y, w, h)
-        if (len(polygon) >= 6 and .7 <= w / h <= 1.4 and circularity >= .78
+        if (len(polygon) >= 6 and .7 <= w / h <= 1.4 and circularity >= .63
                 and _looks_circular(mask, region)):
             circles.append(region)
-    flags = [flag for flag in _distinct(flags) if flag[3] >= min(mask.shape) * .07]
+    flags = [flag for flag in _distinct(flags)
+             if min(mask.shape) * .07 <= flag[3] <= min(mask.shape) * .15]
     circles = [circle for circle in _distinct(circles)
-               if not any(_overlap_ratio(circle, flag) >= .25 for flag in flags)]
+               if not any(_overlap_ratio(circle, flag) >= .25 for flag in flags)
+               and _looks_like_pen_ink(image, mask, circle)]
     return circles, flags

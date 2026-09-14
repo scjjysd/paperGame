@@ -49,6 +49,14 @@ def test_explicit_marker_jobs_do_not_reuse_old_inferred_start_cache():
     assert derive_level_job_id(b'image', DEFAULT_PLAYABILITY_PROFILE) != 'level_' + old_digest[:12]
 
 
+def test_visible_canvas_jobs_do_not_reuse_old_marker_cache():
+    import hashlib
+    old_digest = hashlib.sha256(b'image' + canonical_profile_json(DEFAULT_PLAYABILITY_PROFILE)
+                                + ALGORITHM_MAJOR_VERSION.encode('ascii')
+                                + b':explicit-markers-v1').hexdigest()
+    assert derive_level_job_id(b'image', DEFAULT_PLAYABILITY_PROFILE) != 'level_' + old_digest[:12]
+
+
 def test_ready_contract_accepts_skipped_playability():
     import json
     payload = json.loads((FIXTURES / 'ready.json').read_text())

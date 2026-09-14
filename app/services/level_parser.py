@@ -2,6 +2,7 @@
 import hashlib
 import json
 import logging
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
@@ -126,7 +127,11 @@ def _coverage(mask: np.ndarray, platform: Any) -> float:
     valid = (xs >= 0) & (xs < mask.shape[1]) & (ys >= 0) & (ys < mask.shape[0])
     if not valid.any():
         return 0.0
-    return float(np.count_nonzero(mask[ys[valid], xs[valid]])) / int(valid.sum())
+    # 候选是手绘曲线的直线拟合，允许中心线相对真实笔迹有 1px 偏差。
+    hits = [mask[max(0, y - 1):min(mask.shape[0], y + 2),
+                 max(0, x - 1):min(mask.shape[1], x + 2)].any()
+            for x, y in zip(xs[valid], ys[valid])]
+    return float(np.mean(hits))
 
 
 def _duplicate(platforms: Sequence[Any]) -> bool:
@@ -240,21 +245,38 @@ def parse(job_dir: Path, progress: Progress = None,
     if not input_path.exists():
         raise FileNotFoundError('关卡任务 {} 缺少上传原图：{}'.format(job_id, input_path))
     _stage(progress, 'rectifying_paper')
+    visible_fallback = False
     try:
         rectified = level_rectify.rectify(input_path, job_dir)
     except level_rectify.RectifyIssue as issue:
         logger.warning('关卡任务 %s 纸张拉正失败：%s（%s）', job_id, issue.reason, issue)
-        review_image = job_dir / 'rectified.png'
-        if not review_image.exists():
-            _atomic_bytes(review_image, input_path.read_bytes())
-        _publish_review_artifacts(job_dir, issue.reason, (), review_image, progress)
-        image = cv2.imread(str(review_image), cv2.IMREAD_COLOR)
-        height, width = image.shape[:2]
-        return _review_payload(job_dir, issue.reason, issue.candidates,
-                               width, height, created, updated)
+        if issue.reason == 'PAPER_OCCLUDED' and not issue.candidates:
+            rectified = level_rectify.normalize_visible_canvas(input_path, job_dir)
+            visible_fallback = True
+            logger.info('关卡任务 %s 改用可见画面中心安全区继续识别', job_id)
+        else:
+            review_image = job_dir / 'rectified.png'
+            if not review_image.exists():
+                _atomic_bytes(review_image, input_path.read_bytes())
+            _publish_review_artifacts(job_dir, issue.reason, (), review_image, progress)
+            image = cv2.imread(str(review_image), cv2.IMREAD_COLOR)
+            height, width = image.shape[:2]
+            return _review_payload(job_dir, issue.reason, issue.candidates,
+                                   width, height, created, updated)
     logger.info('关卡任务 %s 纸张拉正完成：画布 %dx%d', job_id, rectified.width, rectified.height)
     _stage(progress, 'detecting_platforms')
     detection = level_detect.detect(rectified.rectified_path, job_dir)
+    if visible_fallback:
+        # 降级画布可能包含桌面、书页边框和印刷 Logo；有效拍摄框外候选不参与歧义判断。
+        starts = [point for point in detection.start_candidates
+                  if rectified.width * .05 < point.x < rectified.width * .95
+                  and rectified.height * .05 < point.y < rectified.height * .95]
+        goals = [goal for goal in detection.goal_candidates
+                 if rectified.width * .05 < goal.region.x + goal.region.width / 2
+                 < rectified.width * .95
+                 and rectified.height * .05 < goal.region.y + goal.region.height / 2
+                 < rectified.height * .95]
+        detection = replace(detection, start_candidates=starts, goal_candidates=goals)
     _stage(progress, 'detecting_goal')
     _stage(progress, 'semantic_review')
     semantic = level_semantic.review(rectified.rectified_path, detection,

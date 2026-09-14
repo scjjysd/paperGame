@@ -273,7 +273,7 @@ def canonical_profile_json(profile: PlayabilityProfile) -> bytes:
 
 
 def derive_level_job_id(content: bytes, profile: PlayabilityProfile) -> str:
-    # 新规则要求显式起终点，不复用旧版自动推断起点的缓存结果。
+    # v2 增加纸边不可见降级与手绘标记抗干扰，不复用旧识别结果。
     digest = hashlib.sha256(content + canonical_profile_json(profile) + ALGORITHM_MAJOR_VERSION.encode('ascii')
-                            + b':explicit-markers-v1').hexdigest()
+                            + b':explicit-markers-v2').hexdigest()
     return 'level_' + digest[:12]

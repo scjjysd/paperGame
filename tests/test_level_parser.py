@@ -167,6 +167,23 @@ def test_rectify_review_reasons_never_publish_level(tmp_path, parser_stubs, reas
     assert parser_stubs['stages'][-1] == 'publishing_artifacts'
 
 
+def test_visible_canvas_fallback_rejection_returns_review_instead_of_crashing(tmp_path, monkeypatch):
+    from app.services import level_parser
+    from app.services.level_parser import parse
+
+    image = np.full((960, 1280, 3), (180, 80, 30), np.uint8)
+    cv2.imwrite(str(tmp_path / 'input.png'), image)
+
+    def occluded(*_args, **_kwargs):
+        raise RectifyIssue('PAPER_OCCLUDED', [])
+
+    monkeypatch.setattr(level_parser.level_rectify, 'rectify', occluded)
+    payload = parse(tmp_path)
+
+    assert payload['status'] == 'needs_review'
+    assert payload['review']['reason'] == 'PAPER_NOT_FOUND'
+
+
 @pytest.mark.parametrize('case, reason', [
     ('no-platform', 'NO_PLATFORM_DETECTED'),
     ('low-confidence', 'LOW_CONFIDENCE'),

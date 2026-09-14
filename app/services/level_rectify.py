@@ -315,3 +315,43 @@ def rectify(input_path: Path, job_dir: Path) -> RectifyResult:
     transform = {'matrix': matrix.tolist(), 'inputSize': {'width': int(image.shape[1]), 'height': int(image.shape[0])}, 'outputSize': {'width': target_w, 'height': target_h}}
     _atomic_json(job_dir / 'transform.json', transform)
     return RectifyResult(rectified_path, target_w, target_h, corners.tolist(), matrix.tolist())
+
+
+def normalize_visible_canvas(input_path: Path, job_dir: Path) -> RectifyResult:
+    """纸张四角不可见时，按关卡画布比例中心裁切；仅由解析器在内容可继续校验时使用。"""
+    image = cv2.imread(str(input_path), cv2.IMREAD_COLOR)
+    if image is None:
+        raise RectifyIssue('PAPER_NOT_FOUND', message='无法读取输入图片。')
+    height, width = image.shape[:2]
+    target_aspect = 900.0 / 560.0
+    if width / height >= target_aspect:
+        crop_width = int(round(height * target_aspect))
+        left, top = (width - crop_width) // 2, 0
+        right, bottom = left + crop_width - 1, height - 1
+    else:
+        crop_height = int(round(width / target_aspect))
+        left, top = 0, (height - crop_height) // 2
+        right, bottom = width - 1, top + crop_height - 1
+    crop = image[top:bottom + 1, left:right + 1]
+    crop_height, crop_width = crop.shape[:2]
+    center = crop[int(crop_height * .12):int(crop_height * .88),
+                  int(crop_width * .08):int(crop_width * .92)]
+    hsv = cv2.cvtColor(center, cv2.COLOR_BGR2HSV)
+    paper_like = (hsv[:, :, 1] < 55) & (hsv[:, :, 2] > 100)
+    if float(np.mean(paper_like)) < .72:
+        raise RectifyIssue('PAPER_NOT_FOUND', message='画面中心缺少足够的浅色低饱和纸面。')
+    corners = np.array([[left, top], [right, top], [right, bottom], [left, bottom]], np.float32)
+    destination = np.array([[0, 0], [899, 0], [899, 559], [0, 559]], np.float32)
+    matrix = cv2.getPerspectiveTransform(corners, destination)
+    warped = cv2.warpPerspective(image, matrix, (900, 560), flags=cv2.INTER_LINEAR)
+    job_dir = Path(job_dir)
+    job_dir.mkdir(parents=True, exist_ok=True)
+    rectified_path = job_dir / 'rectified.png'
+    _atomic_imwrite(rectified_path, warped)
+    _write_mask(job_dir, image.shape[:2], corners)
+    transform = {'matrix': matrix.tolist(),
+                 'inputSize': {'width': width, 'height': height},
+                 'outputSize': {'width': 900, 'height': 560},
+                 'mode': 'visible_canvas_fallback'}
+    _atomic_json(job_dir / 'transform.json', transform)
+    return RectifyResult(rectified_path, 900, 560, corners.tolist(), matrix.tolist())
