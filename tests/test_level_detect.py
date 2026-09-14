@@ -8,7 +8,8 @@ import numpy as np
 from app.services.level_detect import detect
 
 
-def _write_image(path: Path, size=(420, 300), lines=(), flags=()):
+def _write_image(path: Path, size=(420, 300), lines=(), flags=(), circles=(),
+                 rectangles=(), polygons=()):
     path.parent.mkdir(parents=True, exist_ok=True)
     image = np.full((size[1], size[0], 3), 245, dtype=np.uint8)
     for x1, y1, x2, y2, width in lines:
@@ -16,6 +17,16 @@ def _write_image(path: Path, size=(420, 300), lines=(), flags=()):
     for x, y, w, h in flags:
         cv2.line(image, (x, y), (x, y + h), (30, 30, 30), 3)
         cv2.polylines(image, [np.array([(x, y), (x + w, y + h // 5), (x, y + h // 2)], dtype=np.int32)], True, (0, 0, 255), 3)
+    for x, y, radius, width in circles:
+        cv2.circle(image, (x, y), radius, (25, 25, 25), width)
+    for x1, y1, x2, y2, width in rectangles:
+        cv2.rectangle(image, (x1, y1), (x2, y2), (25, 25, 25), width)
+    for points, filled in polygons:
+        contour = np.asarray(points, dtype=np.int32)
+        if filled:
+            cv2.fillPoly(image, [contour], (25, 25, 25))
+        else:
+            cv2.polylines(image, [contour], True, (25, 25, 25), 5)
     cv2.imwrite(str(path), image)
 
 
@@ -117,3 +128,96 @@ def test_multiple_flags_remain_separate_candidates(tmp_path):
 
     assert [g.id for g in first.goal_candidates] == ['goal_001', 'goal_002']
     assert [(g.region.x, g.region.y) for g in first.goal_candidates] == [(g.region.x, g.region.y) for g in second.goal_candidates]
+
+
+def test_detects_seventy_pixel_short_horizontal_platform(tmp_path):
+    image = tmp_path / 'short-platform.png'
+    _write_image(image, size=(900, 560), lines=[(120, 180, 190, 180, 7)])
+
+    result = detect(image, tmp_path)
+
+    assert len(result.platform_candidates) == 1
+    assert result.platform_candidates[0].length >= 65
+
+
+def test_detects_eighty_pixel_short_vertical_wall(tmp_path):
+    image = tmp_path / 'short-wall.png'
+    _write_image(image, size=(900, 560), lines=[(220, 150, 220, 230, 7)])
+
+    result = detect(image, tmp_path)
+
+    assert len(result.wall_candidates) == 1
+    assert result.wall_candidates[0].length >= 75
+
+
+def test_detects_hollow_rectangle_as_block(tmp_path):
+    image = tmp_path / 'hollow-block.png'
+    _write_image(image, size=(900, 560), rectangles=[(260, 160, 380, 260, 7)])
+
+    result = detect(image, tmp_path)
+
+    assert len(result.block_candidates) == 1
+    region = result.block_candidates[0].region
+    assert abs(region.x - 260) <= 5 and abs(region.y - 160) <= 5
+    assert abs(region.width - 121) <= 8 and abs(region.height - 101) <= 8
+
+
+def test_detects_filled_non_triangle_polygon_as_block(tmp_path):
+    image = tmp_path / 'solid-block.png'
+    points = [(470, 170), (540, 145), (610, 190), (585, 270), (495, 260)]
+    _write_image(image, size=(900, 560), polygons=[(points, True)])
+
+    result = detect(image, tmp_path)
+
+    assert len(result.block_candidates) == 1
+    region = result.block_candidates[0].region
+    assert region.x <= 472 and region.x + region.width >= 608
+    assert region.y <= 147 and region.y + region.height >= 268
+
+
+def test_circle_marker_is_not_geometry(tmp_path):
+    image = tmp_path / 'circle.png'
+    _write_image(image, size=(900, 560), circles=[(240, 190, 30, 6)])
+
+    result = detect(image, tmp_path)
+
+    assert len(result.start_candidates) == 1
+    assert result.block_candidates == []
+    assert result.platform_candidates == []
+    assert result.wall_candidates == []
+
+
+def test_flag_pole_is_not_wall(tmp_path):
+    image = tmp_path / 'flag-pole.png'
+    _write_image(image, size=(900, 560), flags=[(610, 120, 55, 110)])
+
+    result = detect(image, tmp_path)
+
+    assert len(result.goal_candidates) == 1
+    assert result.wall_candidates == []
+
+
+def test_long_platform_crossing_flag_pole_is_preserved(tmp_path):
+    image = tmp_path / 'platform-through-flag.png'
+    _write_image(image, size=(900, 560),
+                 lines=[(420, 225, 780, 225, 7)],
+                 flags=[(620, 120, 55, 110)])
+
+    result = detect(image, tmp_path)
+
+    assert len(result.goal_candidates) == 1
+    crossing = [candidate for candidate in result.platform_candidates
+                if candidate.start.x < 620 < candidate.end.x]
+    assert len(crossing) == 1
+    assert crossing[0].length >= 340
+
+
+def test_block_edges_are_not_repeated_as_platforms_or_walls(tmp_path):
+    image = tmp_path / 'block-without-duplicate-edges.png'
+    _write_image(image, size=(900, 560), rectangles=[(250, 170, 410, 290, 7)])
+
+    result = detect(image, tmp_path)
+
+    assert len(result.block_candidates) == 1
+    assert result.platform_candidates == []
+    assert result.wall_candidates == []

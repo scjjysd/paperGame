@@ -47,11 +47,19 @@ class GoalCandidate:
     confidence: float
 
 @dataclass(frozen=True)
+class BlockCandidate:
+    id: str
+    region: RegionCandidate
+    confidence: float
+
+@dataclass(frozen=True)
 class DetectionResult:
     platform_candidates: List[PlatformCandidate]
     goal_candidates: List[GoalCandidate]
     ink_mask_path: Path
     start_candidates: List[PointCandidate] = field(default_factory=list)
+    wall_candidates: List[PlatformCandidate] = field(default_factory=list)
+    block_candidates: List[BlockCandidate] = field(default_factory=list)
 
 
 def _ink_mask(image: np.ndarray) -> np.ndarray:
@@ -187,7 +195,68 @@ def _refine_endpoint_x(candidate, origin, unit, normal, projections, gray):
                              candidate.angle_degrees)
 
 
-def _platforms(ink, red, image):
+def _region_overlap(first, second):
+    ax, ay, aw, ah = first
+    bx, by, bw, bh = second
+    width = max(0, min(ax + aw, bx + bw) - max(ax, bx))
+    height = max(0, min(ay + ah, by + bh) - max(ay, by))
+    return width * height / max(1, aw * ah)
+
+
+def _line_region_overlap(start, end, region):
+    length = max(2, int(np.hypot(end[0] - start[0], end[1] - start[1])))
+    xs = np.linspace(start[0], end[0], length)
+    ys = np.linspace(start[1], end[1], length)
+    x, y, width, height = region
+    return float(np.mean((xs >= x) & (xs <= x + width) &
+                         (ys >= y) & (ys <= y + height)))
+
+
+def _blocks(ink, marker_regions):
+    h, w = ink.shape
+    contours, _ = cv2.findContours(ink, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    found = []
+    min_dimension = max(18, int(min(h, w) * .03))
+    for contour in contours:
+        perimeter = cv2.arcLength(contour, True)
+        area = abs(cv2.contourArea(contour))
+        if perimeter <= 0 or area < min_dimension ** 2:
+            continue
+        x, y, width, height = cv2.boundingRect(contour)
+        region = (x, y, width, height)
+        if min(width, height) < min_dimension or width * height > w * h * .35:
+            continue
+        if x <= 5 or y <= 5 or x + width >= w - 5 or y + height >= h - 5:
+            continue
+        polygon = cv2.approxPolyDP(contour, .025 * perimeter, True)
+        if len(polygon) < 4 or not cv2.isContourConvex(cv2.convexHull(polygon)):
+            continue
+        fill_ratio = min(1., area / max(1, width * height))
+        # 外轮廓面积会包含空心图形内部，因此闭合方框接近 1；旗杆与平台相交形成的
+        # 开放细线轮廓则很低，不能把整组线条误当成一个实体。
+        if fill_ratio < .35:
+            continue
+        if any(_region_overlap(region, marker) >= .25 for marker in marker_regions):
+            continue
+        confidence = min(.97, .72 + .20 * fill_ratio)
+        found.append((region, confidence))
+    found.sort(key=lambda item: (item[0][1], item[0][0]))
+    return [BlockCandidate(f'block_{index:03d}',
+                           RegionCandidate(*region, confidence), confidence)
+            for index, (region, confidence) in enumerate(found, 1)]
+
+
+def _is_line_allowed(start, end, marker_regions, block_regions, threshold=.45):
+    if any(_line_region_overlap(start, end, region) >= threshold
+           for region in marker_regions):
+        return False
+    if any(_line_region_overlap(start, end, region) >= .50
+           for region in block_regions):
+        return False
+    return True
+
+
+def _platforms(ink, red, image, marker_regions=(), block_regions=()):
     mask = ink.copy(); mask[red > 0] = 0
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     # 水平形态学开运算将局部纹理压成连通平台条带；15px 闭运算只连接小断裂，
@@ -201,7 +270,8 @@ def _platforms(ink, red, image):
     found = []
     for label in range(1, n):
         x, y, width, height, area = map(int, stats[label])
-        if width < max(110, int(min(h, w) * .10)) or height > max(35, int(h * .045)):
+        minimum = max(55, int(min(h, w) * .10))
+        if width < minimum or height > max(35, int(h * .045)):
             continue
         if y < max(25, int(h * .15)) or x <= 5 or (x + width >= w - 5 and y < int(h * .20)):
             continue
@@ -223,6 +293,23 @@ def _platforms(ink, red, image):
             continue
         length = float(np.hypot(*(b - a)))
         if length < max(55., min(h, w) * .10):
+            continue
+        if length < 110:
+            safe_margin = max(25, int(min(h, w) * .05))
+            if (min(a[0], b[0]) < safe_margin or max(a[0], b[0]) >= w - safe_margin
+                    or min(a[1], b[1]) < safe_margin or max(a[1], b[1]) >= h - safe_margin):
+                continue
+            aspect_ratio = width / max(1, height)
+            samples = max(2, int(length))
+            sample_x = np.clip(np.rint(np.linspace(a[0], b[0], samples)).astype(int), 0, w - 1)
+            sample_y = np.clip(np.rint(np.linspace(a[1], b[1], samples)).astype(int), 0, h - 1)
+            continuity = np.mean([
+                (gray[max(0, y_value - 4):min(h, y_value + 5), x_value] < 100).any()
+                for x_value, y_value in zip(sample_x, sample_y)
+            ])
+            if aspect_ratio < 4.5 or continuity < .70:
+                continue
+        if not _is_line_allowed(a, b, marker_regions, block_regions):
             continue
         confidence = min(.99, .68 + min(.29, length / max(w, 1) * .25))
         candidate = PlatformCandidate('', PointCandidate(round(float(a[0])), round(float(a[1]))),
@@ -252,6 +339,63 @@ def _platforms(ink, red, image):
             for i, (_, _, _, p) in enumerate(merged, 1)]
 
 
+def _walls(ink, image, marker_regions=(), block_regions=()):
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    vertical = cv2.morphologyEx(ink, cv2.MORPH_CLOSE,
+                                cv2.getStructuringElement(cv2.MORPH_RECT, (1, 15)))
+    vertical = cv2.morphologyEx(vertical, cv2.MORPH_OPEN,
+                                cv2.getStructuringElement(cv2.MORPH_RECT, (1, 9)))
+    n, labels, stats, _ = cv2.connectedComponentsWithStats(vertical, 8)
+    h, w = ink.shape
+    minimum = max(55, int(min(h, w) * .10))
+    found = []
+    for label in range(1, n):
+        x, y, width, height, _ = map(int, stats[label])
+        if height < minimum or width > max(35, int(w * .045)):
+            continue
+        if y < max(25, int(h * .15)) or x <= 5 or x + width >= w - 5 or y + height >= h - 7:
+            continue
+        ys, xs = np.nonzero(labels == label)
+        points = np.column_stack((xs.astype(np.float32), ys.astype(np.float32)))
+        vx, vy, x0, y0 = cv2.fitLine(points, cv2.DIST_L2, 0, .01, .01).reshape(-1)
+        angle = float(np.degrees(np.arctan2(vy, vx)))
+        if abs(abs(angle) - 90) > 6:
+            continue
+        unit = np.array([float(vx), float(vy)])
+        origin = np.array([float(x0), float(y0)])
+        projections = (points - origin) @ unit
+        lo, hi = float(projections.min()) + 1., float(projections.max()) - 1.
+        a, b = origin + lo * unit, origin + hi * unit
+        length = float(np.hypot(*(b - a)))
+        if length < max(55., min(h, w) * .10):
+            continue
+        if length < 110:
+            aspect_ratio = height / max(1, width)
+            samples = max(2, int(length))
+            sample_x = np.clip(np.rint(np.linspace(a[0], b[0], samples)).astype(int), 0, w - 1)
+            sample_y = np.clip(np.rint(np.linspace(a[1], b[1], samples)).astype(int), 0, h - 1)
+            continuity = np.mean([
+                (gray[y_value, max(0, x_value - 4):min(w, x_value + 5)] < 100).any()
+                for x_value, y_value in zip(sample_x, sample_y)
+            ])
+            if aspect_ratio < 4.5 or continuity < .70:
+                continue
+        if not _is_line_allowed(a, b, marker_regions, block_regions):
+            continue
+        if a[1] > b[1]:
+            a, b = b, a
+        confidence = min(.99, .68 + min(.29, length / max(h, 1) * .25))
+        found.append((float(a[0] + b[0]), float(a[1]), float(b[1]),
+                      PlatformCandidate('',
+                                        PointCandidate(round(float(a[0])), round(float(a[1]))),
+                                        PointCandidate(round(float(b[0])), round(float(b[1]))),
+                                        confidence, angle)))
+    found.sort(key=lambda item: (item[0], item[1], item[2]))
+    return [PlatformCandidate(f'wall_{index:03d}', candidate.start, candidate.end,
+                              candidate.confidence, candidate.angle_degrees)
+            for index, (_, _, _, candidate) in enumerate(found, 1)]
+
+
 def detect(rectified_path: Path, job_dir: Path) -> DetectionResult:
     image = cv2.imread(str(rectified_path), cv2.IMREAD_COLOR)
     if image is None: raise ValueError(f'无法读取拉正图：{rectified_path}')
@@ -261,10 +405,15 @@ def detect(rectified_path: Path, job_dir: Path) -> DetectionResult:
     if not cv2.imwrite(str(tmp), ink): raise OSError(f'无法写入墨迹遮罩：{tmp}')
     tmp.replace(path)
     circles, flags = detect_markers(image)
-    platforms = _platforms(ink, red, image)
+    marker_regions = [*circles, *flags]
+    blocks = _blocks(ink, marker_regions)
+    block_regions = [(block.region.x, block.region.y, block.region.width, block.region.height)
+                     for block in blocks]
+    platforms = _platforms(ink, red, image, marker_regions, block_regions)
+    walls = _walls(ink, image, marker_regions, block_regions)
     goals = [GoalCandidate(f'goal_{i:03d}', RegionCandidate(x, y, w, h, .9), .9)
              for i, (x, y, w, h) in enumerate(flags, 1)]
     starts = [PointCandidate(x + w // 2, y + h - 1, .9) for x, y, w, h in circles]
-    logger.info('关卡候选检测完成：平台 %d 条、终点 %d 个（图片 %s）',
-                len(platforms), len(goals), rectified_path)
-    return DetectionResult(platforms, goals, path, starts)
+    logger.info('关卡候选检测完成：平台 %d 条、墙 %d 条、实体 %d 个、终点 %d 个（图片 %s）',
+                len(platforms), len(walls), len(blocks), len(goals), rectified_path)
+    return DetectionResult(platforms, goals, path, starts, walls, blocks)
