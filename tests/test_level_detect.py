@@ -4,6 +4,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+import pytest
 
 from app.services.level_detect import detect
 
@@ -189,11 +190,12 @@ def test_circle_marker_is_not_geometry(tmp_path):
 
 def test_flag_pole_is_not_wall(tmp_path):
     image = tmp_path / 'flag-pole.png'
-    _write_image(image, size=(900, 560), flags=[(610, 120, 55, 110)])
+    _write_image(image, size=(900, 560), flags=[(610, 120, 45, 80)])
 
     result = detect(image, tmp_path)
 
     assert len(result.goal_candidates) == 1
+    assert result.block_candidates == []
     assert result.wall_candidates == []
 
 
@@ -221,3 +223,148 @@ def test_block_edges_are_not_repeated_as_platforms_or_walls(tmp_path):
     assert len(result.block_candidates) == 1
     assert result.platform_candidates == []
     assert result.wall_candidates == []
+
+
+def test_detects_filled_triangle_as_block_when_it_is_not_a_marker(tmp_path):
+    image = tmp_path / 'solid-triangle.png'
+    _write_image(image, size=(900, 560),
+                 polygons=[([(300, 150), (390, 270), (210, 270)], True)])
+
+    result = detect(image, tmp_path)
+
+    assert result.goal_candidates == []
+    assert len(result.block_candidates) == 1
+
+
+@pytest.mark.parametrize(('length', 'expected_count'), [(55, 0), (56, 1)])
+def test_horizontal_minimum_length_uses_centerline_endpoints(
+        tmp_path, length, expected_count):
+    image = tmp_path / f'horizontal-{length}.png'
+    _write_image(image, size=(900, 560), lines=[(200, 180, 200 + length, 180, 7)])
+
+    result = detect(image, tmp_path)
+
+    assert len(result.platform_candidates) == expected_count
+
+
+@pytest.mark.parametrize(('length', 'expected_count'), [(55, 0), (56, 1)])
+def test_vertical_minimum_length_uses_centerline_endpoints(
+        tmp_path, length, expected_count):
+    image = tmp_path / f'vertical-{length}.png'
+    _write_image(image, size=(900, 560), lines=[(240, 180, 240, 180 + length, 7)])
+
+    result = detect(image, tmp_path)
+
+    assert len(result.wall_candidates) == expected_count
+
+
+@pytest.mark.parametrize('delta_y', [40, -40])
+def test_platform_at_six_degree_tolerance_is_detected(tmp_path, delta_y):
+    image = tmp_path / f'platform-six-{delta_y}.png'
+    _write_image(image, size=(900, 560),
+                 lines=[(180, 220, 561, 220 + delta_y, 7)])
+
+    result = detect(image, tmp_path)
+
+    assert len(result.platform_candidates) == 1
+
+
+@pytest.mark.parametrize('delta_y', [41, -41])
+def test_platform_beyond_six_degree_tolerance_is_ignored(tmp_path, delta_y):
+    image = tmp_path / f'platform-over-six-{delta_y}.png'
+    _write_image(image, size=(900, 560),
+                 lines=[(180, 220, 561, 220 + delta_y, 7)])
+
+    result = detect(image, tmp_path)
+
+    assert result.platform_candidates == []
+
+
+@pytest.mark.parametrize('delta_x', [40, -40])
+def test_wall_at_six_degree_tolerance_is_detected(tmp_path, delta_x):
+    image = tmp_path / f'wall-six-{delta_x}.png'
+    _write_image(image, size=(900, 560),
+                 lines=[(350, 120, 350 + delta_x, 501, 7)])
+
+    result = detect(image, tmp_path)
+
+    assert len(result.wall_candidates) == 1
+
+
+@pytest.mark.parametrize('delta_x', [41, -41])
+def test_wall_beyond_six_degree_tolerance_is_ignored(tmp_path, delta_x):
+    image = tmp_path / f'wall-over-six-{delta_x}.png'
+    _write_image(image, size=(900, 560),
+                 lines=[(350, 120, 350 + delta_x, 501, 7)])
+
+    result = detect(image, tmp_path)
+
+    assert result.wall_candidates == []
+
+
+def test_short_line_with_low_aspect_ratio_is_not_a_platform(tmp_path):
+    image = tmp_path / 'wide-short-stroke.png'
+    _write_image(image, size=(900, 560), lines=[(200, 180, 270, 180, 21)])
+
+    result = detect(image, tmp_path)
+
+    assert result.platform_candidates == []
+
+
+def test_short_line_with_less_than_seventy_percent_continuity_is_not_a_platform(tmp_path):
+    image = tmp_path / 'broken-short-stroke.png'
+    _write_image(image, size=(900, 560), lines=[
+        (200, 180, 203, 180, 5),
+        (219, 180, 222, 180, 5),
+        (238, 180, 241, 180, 5),
+        (257, 180, 270, 180, 5),
+    ])
+
+    result = detect(image, tmp_path)
+
+    assert result.platform_candidates == []
+
+
+def test_short_platform_outside_safe_area_is_ignored(tmp_path):
+    image = tmp_path / 'unsafe-short-platform.png'
+    _write_image(image, size=(900, 560), lines=[(10, 180, 80, 180, 7)])
+
+    result = detect(image, tmp_path)
+
+    assert result.platform_candidates == []
+
+
+def test_short_wall_outside_safe_area_is_ignored(tmp_path):
+    image = tmp_path / 'unsafe-short-wall.png'
+    _write_image(image, size=(900, 560), lines=[(10, 180, 10, 260, 7)])
+
+    result = detect(image, tmp_path)
+
+    assert result.wall_candidates == []
+
+
+def test_block_touching_page_edge_is_ignored(tmp_path):
+    image = tmp_path / 'page-edge-block.png'
+    _write_image(image, size=(900, 560), rectangles=[(0, 160, 140, 280, 7)])
+
+    result = detect(image, tmp_path)
+
+    assert result.block_candidates == []
+
+
+def test_too_small_closed_shape_is_not_a_block(tmp_path):
+    image = tmp_path / 'small-block.png'
+    _write_image(image, size=(900, 560), rectangles=[(300, 180, 310, 190, 3)])
+
+    result = detect(image, tmp_path)
+
+    assert result.block_candidates == []
+
+
+def test_shape_covering_most_of_canvas_is_not_a_block(tmp_path):
+    image = tmp_path / 'canvas-covering-block.png'
+    _write_image(image, size=(900, 560), rectangles=[(40, 90, 860, 520, 7)])
+
+    result = detect(image, tmp_path)
+
+    assert result.block_candidates == []

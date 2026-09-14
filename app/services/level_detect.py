@@ -212,6 +212,18 @@ def _line_region_overlap(start, end, region):
                          (ys >= y) & (ys <= y + height)))
 
 
+def _centerline_segment(points, origin, unit):
+    """从带圆笔帽的墨迹条带估算用户绘制的中心线端点。"""
+    projections = (points - origin) @ unit
+    normal = np.array([-unit[1], unit[0]])
+    thickness = float(np.ptp((points - origin) @ normal))
+    # OpenCV 光栅线的坐标跨度比像素宽度少约 2px；其余法向跨度对应两端圆笔帽。
+    cap_extension = max(0., thickness - 2.)
+    lo = float(projections.min()) + cap_extension / 2
+    hi = float(projections.max()) - cap_extension / 2
+    return origin + lo * unit, origin + hi * unit, max(0., hi - lo)
+
+
 def _blocks(ink, marker_regions):
     h, w = ink.shape
     contours, _ = cv2.findContours(ink, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -229,7 +241,7 @@ def _blocks(ink, marker_regions):
         if x <= 5 or y <= 5 or x + width >= w - 5 or y + height >= h - 5:
             continue
         polygon = cv2.approxPolyDP(contour, .025 * perimeter, True)
-        if len(polygon) < 4 or not cv2.isContourConvex(cv2.convexHull(polygon)):
+        if len(polygon) < 3:
             continue
         fill_ratio = min(1., area / max(1, width * height))
         # 外轮廓面积会包含空心图形内部，因此闭合方框接近 1；旗杆与平台相交形成的
@@ -271,7 +283,8 @@ def _platforms(ink, red, image, marker_regions=(), block_regions=()):
     for label in range(1, n):
         x, y, width, height, area = map(int, stats[label])
         minimum = max(55, int(min(h, w) * .10))
-        if width < minimum or height > max(35, int(h * .045)):
+        maximum_height = max(35, int(h * .045), int(width * .12) + 12)
+        if width < minimum or height > maximum_height:
             continue
         if y < max(25, int(h * .15)) or x <= 5 or (x + width >= w - 5 and y < int(h * .20)):
             continue
@@ -284,6 +297,7 @@ def _platforms(ink, red, image, marker_regions=(), block_regions=()):
         unit = np.array([float(vx), float(vy)])
         origin = np.array([float(x0), float(y0)])
         projections = (points - origin) @ unit
+        center_a, center_b, centerline_length = _centerline_segment(points, origin, unit)
         # 形态学条带的端点带有半个笔画宽度，内缩后得到中心线端点。
         half_width = 1.0
         lo, hi = float(projections.min()) + half_width, float(projections.max()) - half_width
@@ -292,17 +306,19 @@ def _platforms(ink, red, image, marker_regions=(), block_regions=()):
         if max(a[1], b[1]) >= h - 7 or min(a[1], b[1]) < 0:
             continue
         length = float(np.hypot(*(b - a)))
-        if length < max(55., min(h, w) * .10):
+        if centerline_length + .01 < max(55., min(h, w) * .10):
             continue
-        if length < 110:
+        if centerline_length < 110:
             safe_margin = max(25, int(min(h, w) * .05))
-            if (min(a[0], b[0]) < safe_margin or max(a[0], b[0]) >= w - safe_margin
-                    or min(a[1], b[1]) < safe_margin or max(a[1], b[1]) >= h - safe_margin):
+            if (min(center_a[0], center_b[0]) < safe_margin
+                    or max(center_a[0], center_b[0]) >= w - safe_margin
+                    or min(center_a[1], center_b[1]) < safe_margin
+                    or max(center_a[1], center_b[1]) >= h - safe_margin):
                 continue
             aspect_ratio = width / max(1, height)
-            samples = max(2, int(length))
-            sample_x = np.clip(np.rint(np.linspace(a[0], b[0], samples)).astype(int), 0, w - 1)
-            sample_y = np.clip(np.rint(np.linspace(a[1], b[1], samples)).astype(int), 0, h - 1)
+            samples = max(2, int(centerline_length))
+            sample_x = np.clip(np.rint(np.linspace(center_a[0], center_b[0], samples)).astype(int), 0, w - 1)
+            sample_y = np.clip(np.rint(np.linspace(center_a[1], center_b[1], samples)).astype(int), 0, h - 1)
             continuity = np.mean([
                 (gray[max(0, y_value - 4):min(h, y_value + 5), x_value] < 100).any()
                 for x_value, y_value in zip(sample_x, sample_y)
@@ -351,7 +367,8 @@ def _walls(ink, image, marker_regions=(), block_regions=()):
     found = []
     for label in range(1, n):
         x, y, width, height, _ = map(int, stats[label])
-        if height < minimum or width > max(35, int(w * .045)):
+        maximum_width = max(35, int(w * .045), int(height * .12) + 12)
+        if height < minimum or width > maximum_width:
             continue
         if y < max(25, int(h * .15)) or x <= 5 or x + width >= w - 5 or y + height >= h - 7:
             continue
@@ -364,16 +381,23 @@ def _walls(ink, image, marker_regions=(), block_regions=()):
         unit = np.array([float(vx), float(vy)])
         origin = np.array([float(x0), float(y0)])
         projections = (points - origin) @ unit
+        center_a, center_b, centerline_length = _centerline_segment(points, origin, unit)
         lo, hi = float(projections.min()) + 1., float(projections.max()) - 1.
         a, b = origin + lo * unit, origin + hi * unit
         length = float(np.hypot(*(b - a)))
-        if length < max(55., min(h, w) * .10):
+        if centerline_length + .01 < max(55., min(h, w) * .10):
             continue
-        if length < 110:
+        if centerline_length < 110:
+            safe_margin = max(25, int(min(h, w) * .05))
+            if (min(center_a[0], center_b[0]) < safe_margin
+                    or max(center_a[0], center_b[0]) >= w - safe_margin
+                    or min(center_a[1], center_b[1]) < safe_margin
+                    or max(center_a[1], center_b[1]) >= h - safe_margin):
+                continue
             aspect_ratio = height / max(1, width)
-            samples = max(2, int(length))
-            sample_x = np.clip(np.rint(np.linspace(a[0], b[0], samples)).astype(int), 0, w - 1)
-            sample_y = np.clip(np.rint(np.linspace(a[1], b[1], samples)).astype(int), 0, h - 1)
+            samples = max(2, int(centerline_length))
+            sample_x = np.clip(np.rint(np.linspace(center_a[0], center_b[0], samples)).astype(int), 0, w - 1)
+            sample_y = np.clip(np.rint(np.linspace(center_a[1], center_b[1], samples)).astype(int), 0, h - 1)
             continuity = np.mean([
                 (gray[y_value, max(0, x_value - 4):min(w, x_value + 5)] < 100).any()
                 for x_value, y_value in zip(sample_x, sample_y)
