@@ -224,8 +224,19 @@ def _centerline_segment(points, origin, unit):
     return origin + lo * unit, origin + hi * unit, max(0., hi - lo)
 
 
-def _blocks(ink, marker_regions):
+def _has_substantial_hole(mask):
+    contours, hierarchy = cv2.findContours(mask, cv2.RETR_CCOMP,
+                                           cv2.CHAIN_APPROX_SIMPLE)
+    if hierarchy is None:
+        return False
+    minimum_hole_area = mask.shape[0] * mask.shape[1] * .10
+    return any(parent >= 0 and abs(cv2.contourArea(contour)) >= minimum_hole_area
+               for contour, (_, _, _, parent) in zip(contours, hierarchy[0]))
+
+
+def _blocks(ink, marker_regions, image):
     h, w = ink.shape
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     contours, _ = cv2.findContours(ink, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     found = []
     min_dimension = max(18, int(min(h, w) * .03))
@@ -249,6 +260,19 @@ def _blocks(ink, marker_regions):
         if fill_ratio < .35:
             continue
         if any(_region_overlap(region, marker) >= .25 for marker in marker_regions):
+            continue
+        dark_region = (gray[y:y + height, x:x + width] < 100).astype(np.uint8) * 255
+        dark_fill_ratio = float(np.count_nonzero(dark_region)) / max(1, width * height)
+        aspect_ratio = max(width, height) / max(1, min(width, height))
+        ink_region = ink[y:y + height, x:x + width]
+        long_flat_outline = (aspect_ratio >= 4.5
+                             and max(width, height) >= min(h, w) * .35)
+        # 实心图形应有足够暗色面积；空心图形必须在原图深色墨迹中确实围出内部区域。
+        # 跨度很大的扁平轮廓仍归类为平台，避免相邻开放长线被阴影桥接成伪 block。
+        is_closed_outline = (not long_flat_outline
+                             and (_has_substantial_hole(dark_region)
+                                  or _has_substantial_hole(ink_region)))
+        if dark_fill_ratio < .45 and not is_closed_outline:
             continue
         confidence = min(.97, .72 + .20 * fill_ratio)
         found.append((region, confidence))
@@ -430,7 +454,7 @@ def detect(rectified_path: Path, job_dir: Path) -> DetectionResult:
     tmp.replace(path)
     circles, flags = detect_markers(image)
     marker_regions = [*circles, *flags]
-    blocks = _blocks(ink, marker_regions)
+    blocks = _blocks(ink, marker_regions, image)
     block_regions = [(block.region.x, block.region.y, block.region.width, block.region.height)
                      for block in blocks]
     platforms = _platforms(ink, red, image, marker_regions, block_regions)

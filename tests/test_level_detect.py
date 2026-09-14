@@ -368,3 +368,55 @@ def test_shape_covering_most_of_canvas_is_not_a_block(tmp_path):
     result = detect(image, tmp_path)
 
     assert result.block_candidates == []
+
+
+def test_cropped_real_photo_keeps_all_fifteen_platforms(tmp_path):
+    from app.services.level_rectify import normalize_visible_canvas
+
+    root = Path(__file__).resolve().parents[1]
+    source = root / 'testdata' / 'levels' / 'real' / 'cropped-paper-markers.jpg'
+    rectified = normalize_visible_canvas(source, tmp_path / 'rectify')
+
+    result = detect(rectified.rectified_path, tmp_path / 'detect')
+
+    assert len(result.platform_candidates) == 15
+    false_regions = {(252, 447, 199, 39), (40, 492, 207, 41)}
+    actual_regions = {(block.region.x, block.region.y,
+                       block.region.width, block.region.height)
+                      for block in result.block_candidates}
+    assert actual_regions.isdisjoint(false_regions)
+
+
+def test_short_wall_with_low_aspect_ratio_is_ignored(tmp_path):
+    image = tmp_path / 'wide-short-wall.png'
+    _write_image(image, size=(900, 560), lines=[(240, 180, 240, 250, 21)])
+
+    result = detect(image, tmp_path)
+
+    assert result.wall_candidates == []
+
+
+def test_short_wall_with_less_than_seventy_percent_continuity_is_ignored(tmp_path):
+    image = tmp_path / 'broken-short-wall.png'
+    _write_image(image, size=(900, 560), lines=[
+        (240, 180, 240, 183, 5),
+        (240, 199, 240, 202, 5),
+        (240, 218, 240, 221, 5),
+        (240, 237, 240, 250, 5),
+    ])
+
+    result = detect(image, tmp_path)
+
+    assert result.wall_candidates == []
+
+
+def test_short_horizontal_line_overlapping_circle_marker_is_ignored(tmp_path):
+    image = tmp_path / 'short-line-through-circle.png'
+    _write_image(image, size=(900, 560),
+                 lines=[(210, 180, 290, 180, 5)],
+                 circles=[(250, 180, 30, 5)])
+
+    result = detect(image, tmp_path)
+
+    assert len(result.start_candidates) == 1
+    assert result.platform_candidates == []
