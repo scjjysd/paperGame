@@ -97,16 +97,27 @@ def _has_triangular_face(mask, pole_x, xs, ys, pole_length):
     return closure >= .55
 
 
-def _pole_flags(mask):
+def _pole_flags(mask, circular_regions=()):
     """从近竖直旗杆及其顶部单侧旗面识别实心或空心旗帜。"""
     short = min(mask.shape)
     lines = cv2.HoughLinesP(mask, 1, np.pi / 360,
                             threshold=max(12, short // 45),
                             minLineLength=max(18, int(short * .035)), maxLineGap=6)
-    if lines is None:
+    # 实心旗面可能让概率霍夫优先消耗横向墨迹，仅留下过短的下伸旗杆。
+    # 额外竖向视图去除横向干扰；候选仍通过原角度、长度、三角面与下伸验证。
+    vertical = cv2.morphologyEx(mask, cv2.MORPH_OPEN,
+                                cv2.getStructuringElement(cv2.MORPH_RECT, (1, 9)))
+    # 已复核圆圈的侧弧不能在辅助视图里伪装成竖杆；原始主视图不变。
+    for x, y, width, height in circular_regions:
+        vertical[y:y + height, x:x + width] = 0
+    vertical_lines = cv2.HoughLinesP(vertical, 1, np.pi / 360,
+                                     threshold=max(12, short // 45),
+                                     minLineLength=max(18, int(short * .035)), maxLineGap=6)
+    line_sets = [raw.reshape(-1, 4) for raw in (lines, vertical_lines) if raw is not None]
+    if not line_sets:
         return []
     result = []
-    for x1, y1, x2, y2 in lines.reshape(-1, 4):
+    for x1, y1, x2, y2 in np.concatenate(line_sets):
         length = float(np.hypot(x2 - x1, y2 - y1))
         angle = abs(float(np.degrees(np.arctan2(y2 - y1, x2 - x1))))
         if abs(angle - 90) > 12 or length < short * .055 or length > short * .35:
@@ -160,7 +171,8 @@ def detect_markers(image):
     # 闭运算仅连接很小的笔画缺口；RETR_LIST 同时保留空心标记内轮廓。
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
     contours, _ = cv2.findContours(mask, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
-    circles, flags = _hough_circles(gray, mask), _pole_flags(mask)
+    circles = _hough_circles(gray, mask)
+    flags = _pole_flags(mask, circles)
     for contour in contours:
         area = abs(cv2.contourArea(contour))
         perimeter = cv2.arcLength(contour, True)
