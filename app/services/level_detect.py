@@ -255,6 +255,19 @@ def _reliable_polygon_outline(ink, gray, region):
     return len(polygon) >= 3
 
 
+def _has_triangular_hole(mask):
+    contours, hierarchy = cv2.findContours(mask, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
+    if hierarchy is None:
+        return False
+    for contour, (_, _, _, parent) in zip(contours, hierarchy[0]):
+        if parent < 0 or abs(cv2.contourArea(contour)) < 35:
+            continue
+        polygon = cv2.approxPolyDP(contour, .04 * cv2.arcLength(contour, True), True)
+        if len(polygon) == 3:
+            return True
+    return False
+
+
 def _blocks(ink, marker_regions, image):
     h, w = ink.shape
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
@@ -280,16 +293,25 @@ def _blocks(ink, marker_regions, image):
         # 开放细线轮廓则很低，不能把整组线条误当成一个实体。
         if any(_region_overlap(region, marker) >= .25 for marker in marker_regions):
             continue
-        dark_region = (gray[y:y + height, x:x + width] < 100).astype(np.uint8) * 255
+        region_gray = gray[y:y + height, x:x + width].copy()
+        ink_region = ink[y:y + height, x:x + width].copy()
+        # marker 的旗面厚墨/内孔不能成为整组相连平台的实体证据。
+        for mx, my, mw, mh in marker_regions:
+            left, right = max(x, mx) - x, min(x + width, mx + mw) - x
+            top, bottom = max(y, my) - y, min(y + height, my + mh) - y
+            if right > left and bottom > top:
+                region_gray[top:bottom, left:right] = 255
+                ink_region[top:bottom, left:right] = 0
+        dark_region = (region_gray < 100).astype(np.uint8) * 255
         dark_fill_ratio = float(np.count_nonzero(dark_region)) / max(1, width * height)
         aspect_ratio = max(width, height) / max(1, min(width, height))
-        ink_region = ink[y:y + height, x:x + width]
         long_flat_outline = (aspect_ratio >= 4.5
                              and max(width, height) >= min(h, w) * .35)
         # 实心图形应有足够暗色面积；空心图形必须在原图深色墨迹中确实围出内部区域。
         # 跨度很大的扁平轮廓仍归类为平台，避免相邻开放长线被阴影桥接成伪 block。
         is_closed_outline = ((not long_flat_outline
-                              or _reliable_polygon_outline(ink, gray, region))
+                              or _reliable_polygon_outline(ink_region, region_gray,
+                                                           (0, 0, width, height)))
                              and (_has_substantial_hole(dark_region)
                                   or _has_substantial_hole(ink_region)))
         # 凹多边形的 bbox 密度可以较低，但实心墨迹面积应与封闭外轮廓面积一致。
@@ -480,8 +502,14 @@ def detect(rectified_path: Path, job_dir: Path) -> DetectionResult:
     circles, flags = detect_markers(image)
     contours, _ = cv2.findContours(ink, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    closed_polygons = [cv2.boundingRect(contour) for contour in contours
-                       if _reliable_polygon_outline(ink, gray, cv2.boundingRect(contour))]
+    closed_polygons = []
+    for contour in contours:
+        region = cv2.boundingRect(contour)
+        x, y, width, height = region
+        # 三角内孔可能属于带下伸旗杆的真实旗帜，不能用闭合证据否决 marker。
+        if (_reliable_polygon_outline(ink, gray, region)
+                and not _has_triangular_hole(ink[y:y + height, x:x + width])):
+            closed_polygons.append(region)
     # 闭合多边形的短边可能触发伪旗杆；可靠闭合边界不是三角旗。
     flags = [flag for flag in flags
              if not any(_region_overlap(flag, region) >= .80

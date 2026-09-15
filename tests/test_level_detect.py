@@ -490,3 +490,41 @@ def test_detects_long_thin_hollow_parallelogram_without_false_flag(tmp_path):
     assert result.goal_candidates == []
     assert result.platform_candidates == []
     assert result.wall_candidates == []
+
+
+def test_black_hollow_triangle_flag_remains_marker_with_downward_pole(tmp_path):
+    image = tmp_path / 'black-hollow-flag.png'
+    _write_image(image, size=(900, 560),
+                 lines=[(610, 120, 610, 200, 5)],
+                 polygons=[([(610, 120), (655, 136), (610, 160)], False, 5)])
+
+    result = detect(image, tmp_path)
+
+    assert len(result.goal_candidates) == 1
+    assert result.block_candidates == []
+    assert result.wall_candidates == []
+    assert result.platform_candidates == []
+
+
+@pytest.mark.parametrize('color', [(25, 25, 25), (0, 0, 255)])
+@pytest.mark.parametrize('filled', [False, True])
+def test_triangle_flag_does_not_swallow_connected_long_platform(tmp_path, color, filled):
+    image_path = tmp_path / 'flag-on-platform.png'
+    _write_image(image_path, size=(900, 560), lines=[
+        (40, 400, 280, 400, 4), (600, 220, 840, 220, 4)])
+    image = cv2.imread(str(image_path))
+    cv2.line(image, (740, 150), (742, 220), color, 3)
+    triangle = np.asarray([(740, 150), (780, 161), (741, 180)], np.int32)
+    if filled:
+        cv2.fillPoly(image, [triangle], color)
+    else:
+        cv2.polylines(image, [triangle], True, color, 3)
+    cv2.imwrite(str(image_path), image)
+
+    result = detect(image_path, tmp_path)
+
+    assert len(result.goal_candidates) == 1
+    assert result.block_candidates == []
+    assert len(result.platform_candidates) == 2
+    assert any(candidate.start.x < 740 < candidate.end.x
+               and candidate.length >= 230 for candidate in result.platform_candidates)
