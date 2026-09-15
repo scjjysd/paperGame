@@ -208,3 +208,21 @@ def test_image_without_edges_or_markers_fails_for_missing_markers(tmp_path, monk
 
     assert result.error.code == 'START_AND_GOAL_NOT_FOUND'
     assert not result.error.retryable
+
+
+def test_real_short_platform_photo_generates_all_ten_platforms(tmp_path, monkeypatch):
+    from app.level_contracts import LevelReady
+    from app.services.level_parser import parse
+
+    for key in ('LEVEL_LLM_BASE_URL', 'LEVEL_LLM_API_KEY', 'LEVEL_LLM_MODEL'):
+        monkeypatch.delenv(key, raising=False)
+    source = Path(__file__).resolve().parents[1] / 'testdata/levels/real/short-platform.jpg'
+    (tmp_path / 'input.png').write_bytes(source.read_bytes())
+    result = LevelReady.model_validate(parse(tmp_path))
+    assert result.result.analysis.playability == 'not_checked'
+    platforms = result.result.level.platforms
+    assert len(platforms) == 10
+    short = [p for p in platforms if abs(p.start.x - 240) <= 15
+             and abs(p.start.y - 180) <= 15]
+    assert len(short) == 1
+    assert 56 <= short[0].end.x - short[0].start.x <= 109

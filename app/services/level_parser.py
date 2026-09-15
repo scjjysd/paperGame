@@ -168,6 +168,61 @@ def _goal_region(goal: Any) -> Dict[str, Any]:
             'height': region.height, 'confidence': goal.confidence}
 
 
+def _collision_geometry(detection: Any, ink: np.ndarray,
+                        width: int, height: int) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """可选碰撞候选只发布画布内、有墨迹且不重复的几何。"""
+    walls = []
+    for wall in sorted(getattr(detection, 'wall_candidates', []),
+                       key=lambda w: (-w.confidence, w.id)):
+        points = [wall.start, wall.end]
+        if (not MIN_PUBLISH_CONFIDENCE <= wall.confidence <= 1
+                or abs(wall.end.y - wall.start.y) <= abs(wall.end.x - wall.start.x)
+                or any(not (0 <= p.x < width and 0 <= p.y < height) for p in points)
+                or _coverage(ink, wall) < MIN_INK_COVERAGE):
+            continue
+        duplicate = False
+        for other in walls:
+            top, bottom = sorted([wall.start.y, wall.end.y])
+            other_top, other_bottom = sorted([other.start.y, other.end.y])
+            overlap = min(bottom, other_bottom) - max(top, other_top) + 1
+            shortest = min(abs(wall.end.y - wall.start.y), abs(other.end.y - other.start.y)) + 1
+            x_distance = abs((wall.start.x + wall.end.x - other.start.x - other.end.x) / 2)
+            if overlap / shortest >= DUPLICATE_OVERLAP and x_distance <= DUPLICATE_Y_DISTANCE:
+                duplicate = True
+                break
+        if not duplicate:
+            walls.append(wall)
+    blocks = []
+    for block in sorted(getattr(detection, 'block_candidates', []),
+                        key=lambda b: (-b.confidence, b.id)):
+        r = block.region
+        if (not MIN_PUBLISH_CONFIDENCE <= block.confidence <= 1 or r.width <= 0 or r.height <= 0
+                or r.x < 0 or r.y < 0 or r.x + r.width > width or r.y + r.height > height):
+            continue
+        # 任意多边形的外接矩形四边可能没有墨迹；形状证据由检测层负责，
+        # 发布层仅确认候选区域仍有墨迹，不能把 bbox 密度当成形状门禁。
+        if not ink[r.y:r.y + r.height, r.x:r.x + r.width].any():
+            continue
+        if any((max(0, min(r.x + r.width, b.region.x + b.region.width) - max(r.x, b.region.x))
+                * max(0, min(r.y + r.height, b.region.y + b.region.height) - max(r.y, b.region.y)))
+               / min(r.width * r.height, b.region.width * b.region.height) >= DUPLICATE_OVERLAP
+               for b in blocks):
+            continue
+        blocks.append(block)
+    ordered_walls = sorted(walls, key=lambda w: (
+        min(w.start.x, w.end.x), min(w.start.y, w.end.y),
+        max(w.start.x, w.end.x), max(w.start.y, w.end.y), w.id))
+    wall_data = []
+    for index, w in enumerate(ordered_walls, 1):
+        a, b = sorted([w.start, w.end], key=lambda p: (p.y, p.x))
+        wall_data.append({'id': 'wall_{:03d}'.format(index), 'start': {'x': a.x, 'y': a.y},
+                          'end': {'x': b.x, 'y': b.y}, 'confidence': w.confidence})
+    block_data = [{'id': 'block_{:03d}'.format(i), 'region': _goal_region(b)}
+                  for i, b in enumerate(sorted(blocks, key=lambda b: (
+                      b.region.x, b.region.y, b.region.width, b.region.height, b.id)), 1)]
+    return wall_data, block_data
+
+
 def _overlay(path: Path, level: Level, analysis: Any) -> None:
     image = cv2.imread(str(path), cv2.IMREAD_COLOR)
     if image is None:
@@ -177,6 +232,16 @@ def _overlay(path: Path, level: Level, analysis: Any) -> None:
         cv2.line(image, (platform.start.x, platform.start.y),
                  (platform.end.x, platform.end.y), color, 1, cv2.LINE_AA)
         cv2.putText(image, platform.id, (platform.start.x, max(10, platform.start.y - 4)),
+                    cv2.FONT_HERSHEY_SIMPLEX, .3, color, 1, cv2.LINE_AA)
+    for wall in level.walls:
+        color = (0, 160, 255)
+        cv2.line(image, (wall.start.x, wall.start.y), (wall.end.x, wall.end.y), color, 2)
+        cv2.putText(image, wall.id, (wall.start.x, max(10, wall.start.y - 4)),
+                    cv2.FONT_HERSHEY_SIMPLEX, .3, color, 1, cv2.LINE_AA)
+    for block in level.blocks:
+        r, color = block.region, (180, 0, 180)
+        cv2.rectangle(image, (r.x, r.y), (r.x + r.width - 1, r.y + r.height - 1), color, 2)
+        cv2.putText(image, block.id, (r.x, max(10, r.y - 4)),
                     cv2.FONT_HERSHEY_SIMPLEX, .3, color, 1, cv2.LINE_AA)
     cv2.circle(image, (level.playerStart.x, level.playerStart.y), 3, (255, 0, 255), 1)
     goal = level.goalRegion
@@ -319,6 +384,7 @@ def parse(job_dir: Path, progress: Progress = None,
              'confidence': starts[0].confidence}
 
     background_url = _artifact_url(job_id, 'rectified.png')
+    walls, blocks = _collision_geometry(detection, ink, rectified.width, rectified.height)
     level_data = {'schemaVersion': SCHEMA_VERSION,
                   'coordinateSystem': {'origin': 'top_left', 'xAxis': 'right',
                                        'yAxis': 'down', 'unit': 'pixel'},
@@ -327,6 +393,7 @@ def parse(job_dir: Path, progress: Progress = None,
                                  'width': rectified.width, 'height': rectified.height,
                                  'sha256': hashlib.sha256(rectified.rectified_path.read_bytes()).hexdigest()},
                   'playerStart': start, 'platforms': _platforms(semantic.platforms),
+                  'walls': walls, 'blocks': blocks,
                   'goalRegion': _goal_region(max(semantic.goals, key=lambda goal: (goal.confidence, goal.id)))}
     try:
         level = Level.model_validate(level_data)

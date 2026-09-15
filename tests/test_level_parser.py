@@ -10,7 +10,7 @@ from PIL import Image
 
 from app.level_contracts import DEFAULT_PLAYABILITY_PROFILE, Level, PlayabilityAnalysis
 from app.services.level_detect import (
-    DetectionResult, GoalCandidate, PlatformCandidate, PointCandidate, RegionCandidate)
+    BlockCandidate, DetectionResult, GoalCandidate, PlatformCandidate, PointCandidate, RegionCandidate)
 from app.services.level_rectify import RectifyIssue, RectifyResult
 from app.services.level_semantic import SemanticResult
 
@@ -92,6 +92,7 @@ def test_parse_ready_writes_aligned_authoritative_artifacts(tmp_path, parser_stu
     assert (tmp_path / 'overlay.png').exists()
     assert parser_stubs['stages'] == STAGES
     assert [p.id for p in level.platforms] == ['platform_001', 'platform_002', 'platform_003']
+    assert level.walls == [] and level.blocks == []
     assert level.playerStart.model_dump() == {
         'x': 55, 'y': 160, 'source': 'detected', 'confidence': .9}
     assert level.background.sha256 == hashlib.sha256((tmp_path / 'rectified.png').read_bytes()).hexdigest()
@@ -103,6 +104,76 @@ def test_parse_passes_injected_client_to_semantic_review(tmp_path, parser_stubs)
     semantic_client = object()
     parse(tmp_path, semantic_client=semantic_client)
     assert parser_stubs['semantic_client'] is semantic_client
+
+
+def test_parse_publishes_sorted_filtered_collision_geometry(tmp_path, parser_stubs):
+    from app.services.level_parser import parse
+
+    walls = [_platform('z', 260, 150, 260, 90), _platform('a', 80, 40, 80, 100),
+             _platform('duplicate', 80, 100, 80, 40),
+             _platform('outside', -1, 40, -1, 100), _platform('zero', 90, 50, 90, 50),
+             _platform('weak', 90, 40, 90, 100, .2)]
+    blocks = [BlockCandidate('z', RegionCandidate(280, 130, 40, 30, .9), .9),
+              BlockCandidate('a', RegionCandidate(100, 40, 30, 20, .9), .9),
+              BlockCandidate('duplicate', RegionCandidate(100, 40, 30, 20, .9), .9),
+              BlockCandidate('outside', RegionCandidate(390, 40, 30, 20, .9), .9),
+              BlockCandidate('zero', RegionCandidate(100, 40, 0, 20, .9), .9),
+              BlockCandidate('weak', RegionCandidate(140, 40, 30, 20, .2), .2)]
+    parser_stubs['detection'] = replace(parser_stubs['detection'],
+                                       wall_candidates=walls, block_candidates=blocks)
+    result = parse(tmp_path)['result']
+    assert [w['id'] for w in result['level']['walls']] == ['wall_001', 'wall_002']
+    assert result['level']['walls'][0]['start'] == {'x': 80, 'y': 40}
+    assert result['level']['walls'][1]['end'] == {'x': 260, 'y': 150}
+    assert result['level']['walls'][0]['confidence'] == .95
+    assert [b['id'] for b in result['level']['blocks']] == ['block_001', 'block_002']
+    assert result['level']['blocks'][0]['region']['width'] == 30
+    assert result['analysis']['playability'] == 'not_checked'
+    overlay = cv2.imread(str(tmp_path / 'overlay.png'))
+    assert tuple(overlay[60, 80]) == (0, 160, 255)
+    assert tuple(overlay[40, 110]) == (180, 0, 180)
+    first_bytes = (tmp_path / 'level.json').read_bytes()
+    parser_stubs['detection'] = replace(parser_stubs['detection'],
+                                       wall_candidates=list(reversed(walls)),
+                                       block_candidates=list(reversed(blocks)))
+    parse(tmp_path)
+    assert (tmp_path / 'level.json').read_bytes() == first_bytes
+
+
+def test_collision_geometry_requires_ink_evidence(tmp_path, parser_stubs, monkeypatch):
+    from app.services import level_parser
+
+    wall = _platform('no-ink', 260, 30, 260, 50)
+    block = BlockCandidate('no-ink', RegionCandidate(280, 30, 30, 20, .9), .9)
+    parser_stubs['detection'] = replace(parser_stubs['detection'],
+                                       wall_candidates=[wall], block_candidates=[block])
+    original = level_parser.level_detect.detect
+    def detect(path, directory):
+        result = original(path, directory)
+        mask = cv2.imread(str(result.ink_mask_path), cv2.IMREAD_GRAYSCALE)
+        mask[:60, 250:] = 0
+        cv2.imwrite(str(result.ink_mask_path), mask)
+        return result
+    monkeypatch.setattr(level_parser.level_detect, 'detect', detect)
+    level = level_parser.parse(tmp_path)['result']['level']
+    assert level['walls'] == [] and level['blocks'] == []
+
+
+def test_polygon_block_uses_actual_ink_instead_of_bounding_box_edges(tmp_path, parser_stubs, monkeypatch):
+    from app.services import level_parser
+
+    block = BlockCandidate('diamond', RegionCandidate(250, 10, 41, 41, .9), .9)
+    parser_stubs['detection'] = replace(parser_stubs['detection'], block_candidates=[block])
+    original = level_parser.level_detect.detect
+    def detect(path, directory):
+        result = original(path, directory)
+        mask = cv2.imread(str(result.ink_mask_path), cv2.IMREAD_GRAYSCALE)
+        mask[:60, 240:300] = 0
+        cv2.polylines(mask, [np.array([(270, 10), (290, 30), (270, 50), (250, 30)])], True, 255, 2)
+        cv2.imwrite(str(result.ink_mask_path), mask)
+        return result
+    monkeypatch.setattr(level_parser.level_detect, 'detect', detect)
+    assert len(level_parser.parse(tmp_path)['result']['level']['blocks']) == 1
 
 
 def test_unplayable_is_ready_and_keeps_exact_geometry(tmp_path, parser_stubs):
