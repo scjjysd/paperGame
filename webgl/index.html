@@ -11,52 +11,15 @@
     <link rel="manifest" href="manifest.json">
     <title>PaperGame</title>
     <link rel="stylesheet" href="TemplateData/style.css">
-    <style>
-      /* ── 竖屏旋转提示 ─ */
-      #rotate-overlay {
-        display: none;
-        position: fixed;
-        top: 0; left: 0; right: 0; bottom: 0;
-        z-index: 999998;
-        background: #000;
-        color: #fff;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        font: 20px/1.6 -apple-system, "Helvetica Neue", sans-serif;
-        text-align: center;
-        user-select: none;
-        -webkit-user-select: none;
-      }
-      #rotate-overlay .icon {
-        font-size: 64px;
-        margin-bottom: 24px;
-        animation: rotate-hint 2s ease-in-out infinite;
-      }
-      @keyframes rotate-hint {
-        0%, 100% { transform: rotate(0deg); }
-        50% { transform: rotate(90deg); }
-      }
-      @media (orientation: portrait) {
-        #rotate-overlay { display: flex !important; }
-        #unity-container, #fullscreen-btn { display: none !important; }
-      }
-    </style>
   </head>
   <body>
-    <!-- 横屏提示 -->
-    <div id="rotate-overlay">
-      <div class="icon">📱</div>
-      <div>请横屏使用</div>
-    </div>
-
     <div id="unity-container">
       <canvas id="unity-canvas" tabindex="-1"></canvas>
       <div id="unity-loading-bar">
         <div id="unity-progress-bar-full"></div>
       </div>
       <div id="unity-warning"></div>
-      <div id="build-time">出包时间：2026-09-15 21:44:27 UTC+8</div>
+      <div id="build-time">出包时间：2026-09-16 01:38:41 UTC+8</div>
     </div>
     <button id="fullscreen-btn" onclick="enterFullscreen()">全屏</button>
 
@@ -88,40 +51,6 @@
         if (fn) { fn.call(el).catch(function () {}); }
         fullscreenBtn.style.display = "none";
       }
-
-      /* Android 横屏 API 锁定 */
-      (function () {
-        var locked = false;
-        function lockLandscape() {
-          if (locked) return;
-          var so = screen.orientation;
-          if (so && so.lock) { so.lock("landscape").catch(function () {}); locked = true; }
-        }
-        ["click", "touchstart"].forEach(function (evt) {
-          document.addEventListener(evt, function () { lockLandscape(); }, { once: true, passive: true });
-        });
-      })();
-
-      /* iOS 横屏强制遮罩（CSS @media 的 JS 双保险） */
-      (function () {
-        var rotateOverlay = document.getElementById("rotate-overlay");
-        var unityContainer = document.getElementById("unity-container");
-        function enforceLandscape() {
-          var isPortrait = window.innerHeight > window.innerWidth;
-          if (isPortrait) {
-            rotateOverlay.style.display = "flex";
-            if (unityContainer) unityContainer.style.display = "none";
-          } else {
-            rotateOverlay.style.display = "none";
-            if (unityContainer) unityContainer.style.display = "";
-          }
-        }
-        enforceLandscape();
-        window.addEventListener("orientationchange", function () {
-          setTimeout(enforceLandscape, 50);
-        });
-        window.addEventListener("resize", enforceLandscape);
-      })();
 
       var buildUrl = "Build";
       var loaderUrl = buildUrl + "/C1WebGL.loader.js";

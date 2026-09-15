@@ -85,18 +85,14 @@ body {
 
 /* 竖屏时强制旋转 90° 横屏显示 */
 @media (orientation: portrait) {
-  html, body {
-    width: 100vh;
-    height: 100vw;
-  }
   #unity-container {
     width: 100vh;
     height: 100vw;
     transform: rotate(90deg);
     transform-origin: top left;
     position: absolute;
-    top: 100vw;
-    left: 0;
+    top: 0;
+    left: 100vw;
   }
 }
 

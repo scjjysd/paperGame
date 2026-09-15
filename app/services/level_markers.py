@@ -38,6 +38,26 @@ def _looks_circular(mask, region):
     return coverage >= .78 and radial_error <= .055 and radial_spread <= .105
 
 
+def _is_quadrilateral_outline(mask, region):
+    """排除被霍夫圆误检的近正方形小平台或方框。"""
+    x, y, width, height = region
+    padding = 5
+    left, top = max(0, x - padding), max(0, y - padding)
+    right = min(mask.shape[1], x + width + padding)
+    bottom = min(mask.shape[0], y + height + padding)
+    contours, _ = cv2.findContours(mask[top:bottom, left:right], cv2.RETR_EXTERNAL,
+                                   cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return False
+    contour = max(contours, key=cv2.contourArea)
+    perimeter = cv2.arcLength(contour, True)
+    if perimeter == 0:
+        return False
+    polygon = cv2.approxPolyDP(contour, .035 * perimeter, True)
+    _, _, contour_width, contour_height = cv2.boundingRect(contour)
+    return (len(polygon) == 4 and .65 <= contour_width / max(1, contour_height) <= 1.55)
+
+
 def _looks_like_pen_ink(image, mask, region):
     """保留黑笔或深色彩笔，排除浅色高饱和度印刷 Logo/字母。"""
     x, y, w, h = region
@@ -62,7 +82,7 @@ def _hough_circles(gray, mask):
     for x, y, radius in found[0]:
         region = (max(0, int(round(x - radius))), max(0, int(round(y - radius))),
                   int(round(2 * radius)), int(round(2 * radius)))
-        if _looks_circular(mask, region):
+        if _looks_circular(mask, region) and not _is_quadrilateral_outline(mask, region):
             # 手绘圆紧邻平台时，底边缘会被直线干扰；留少量余量作为角色落脚点。
             region = (region[0], region[1], region[2], region[3] + max(2, int(round(radius * .15))))
             result.append(region)

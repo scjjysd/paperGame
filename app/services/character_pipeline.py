@@ -33,7 +33,7 @@ class CharacterPipeline:
         }
 
     def render_character(self, input_path, motions: Sequence[str] = ('run', 'jump')) -> Dict:
-        """角色级入口：标注只做一次，帧尺寸取所有动作帧内容包围盒的并集，保证各动作一致。"""
+        """角色级入口：标注只做一次，将各动作角色缩放到统一像素高度后构建精灵表，保证视觉大小一致。"""
         char_dir = self.out_root / Path(input_path).stem
         (char_dir / 'anno').mkdir(parents=True, exist_ok=True)
         analyze(input_path, char_dir / 'anno')
@@ -47,19 +47,30 @@ class CharacterPipeline:
             gifs[m] = render_animation(char_dir / 'anno', synth_motion(char_cfg, m, out_dir),
                                        out_dir / f'{m}.gif')
 
-        # 所有动作全部帧内容包围盒的并集 -> 统一帧尺寸
-        left = top = None
-        right = bottom = 0
-        for gif in gifs.values():
+        # 测量每个动画的内容尺寸，计算缩放到统一目标高度所需的 scale
+        content_sizes = {}
+        max_h = 0
+        for m, gif in gifs.items():
             l, t, r, b = compute_content_bbox(gif)
-            left, top = l if left is None else min(left, l), t if top is None else min(top, t)
-            right, bottom = max(right, r), max(bottom, b)
-        frame_size = (right - left, bottom - top)
+            content_sizes[m] = (r - l, b - t)
+            max_h = max(max_h, b - t)
+
+        pad = max(1, round(max_h * 0.1))
+        frame_w = 0
+        scales = {}
+        for m, (cw, ch) in content_sizes.items():
+            s = max_h / ch if ch > 0 else 1.0
+            scales[m] = s
+            sw = max(1, round(cw * s))
+            frame_w = max(frame_w, sw)
+        frame_w += 2 * pad
+        frame_h = max_h + 2 * pad
 
         animations = {}
         for m in motions:
             out_dir = char_dir / m
-            meta = build_sprite_sheet(gifs[m], out_dir / f'{m}.png', fps=FPS, frame_size=frame_size)
+            meta = build_sprite_sheet(gifs[m], out_dir / f'{m}.png', fps=FPS,
+                                      frame_size=(frame_w, frame_h), scale=scales[m])
             animations[m] = {**meta, 'spriteSheetUrl': str(out_dir / f'{m}.png')}
 
         return {'status': 'ready', 'animations': animations}

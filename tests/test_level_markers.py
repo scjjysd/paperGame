@@ -87,6 +87,21 @@ def test_circle_with_eighty_degree_gap_is_detected(tmp_path):
     assert len(result.start_candidates) == 1
 
 
+def test_small_rectangular_platform_is_not_detected_as_second_circle(tmp_path):
+    image = drawing(circle=False, flag=False)
+    cv2.circle(image, (120, 380), 18, (25, 25, 25), 3)
+    # 接近正方形的小平台会触发霍夫圆，需要只保留真正的手绘起点圆。
+    cv2.rectangle(image, (430, 340), (460, 368), (25, 25, 25), 2)
+    path = tmp_path / 'circle-and-small-platform.png'
+    cv2.imwrite(str(path), image)
+
+    result = detect(path, tmp_path)
+
+    assert len(result.start_candidates) == 1
+    assert abs(result.start_candidates[0].x - 120) <= 5
+    assert abs(result.start_candidates[0].y - 398) <= 5
+
+
 @pytest.mark.parametrize('points', [
     [[740, 150], [780, 150], [740, 185]],
     [[740, 150], [780, 185], [740, 185]],
