@@ -234,6 +234,20 @@ def _has_substantial_hole(mask):
                for contour, (_, _, _, parent) in zip(contours, hierarchy[0]))
 
 
+def _reliable_rectangle_outline(ink, region):
+    x, y, width, height = region
+    if min(width, height) < 18:
+        return False
+    mask = ink[y:y + height, x:x + width] > 0
+    band = min(5, min(width, height) // 4)
+    sides = (mask[:, :band].any(axis=1), mask[:, -band:].any(axis=1),
+             mask[:band, :].any(axis=0), mask[-band:, :].any(axis=0))
+    corners = (mask[:band, :band], mask[:band, -band:],
+               mask[-band:, :band], mask[-band:, -band:])
+    return all(float(side.mean()) >= .90 for side in sides) and all(
+        corner.any() for corner in corners)
+
+
 def _blocks(ink, marker_regions, image):
     h, w = ink.shape
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
@@ -269,7 +283,8 @@ def _blocks(ink, marker_regions, image):
                              and max(width, height) >= min(h, w) * .35)
         # 实心图形应有足够暗色面积；空心图形必须在原图深色墨迹中确实围出内部区域。
         # 跨度很大的扁平轮廓仍归类为平台，避免相邻开放长线被阴影桥接成伪 block。
-        is_closed_outline = (not long_flat_outline
+        is_closed_outline = ((not long_flat_outline
+                              or _reliable_rectangle_outline(ink, region))
                              and (_has_substantial_hole(dark_region)
                                   or _has_substantial_hole(ink_region)))
         if dark_fill_ratio < .45 and not is_closed_outline:
@@ -453,6 +468,13 @@ def detect(rectified_path: Path, job_dir: Path) -> DetectionResult:
     if not cv2.imwrite(str(tmp), ink): raise OSError(f'无法写入墨迹遮罩：{tmp}')
     tmp.replace(path)
     circles, flags = detect_markers(image)
+    contours, _ = cv2.findContours(ink, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    closed_rectangles = [cv2.boundingRect(contour) for contour in contours
+                         if _reliable_rectangle_outline(ink, cv2.boundingRect(contour))]
+    # 细长闭合矩形的短边可能触发伪旗杆；四侧连续且角部相连时不是三角旗。
+    flags = [flag for flag in flags
+             if not any(_region_overlap(flag, region) >= .80
+                        for region in closed_rectangles)]
     marker_regions = [*circles, *flags]
     blocks = _blocks(ink, marker_regions, image)
     block_regions = [(block.region.x, block.region.y, block.region.width, block.region.height)

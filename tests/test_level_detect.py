@@ -420,3 +420,33 @@ def test_short_horizontal_line_overlapping_circle_marker_is_ignored(tmp_path):
 
     assert len(result.start_candidates) == 1
     assert result.platform_candidates == []
+
+
+def test_detects_long_thin_hollow_rectangle_as_block(tmp_path):
+    image = tmp_path / 'long-thin-hollow-block.png'
+    _write_image(image, size=(900, 560), rectangles=[(250, 180, 470, 220, 7)])
+
+    result = detect(image, tmp_path)
+
+    assert result.goal_candidates == []
+    assert len(result.block_candidates) == 1
+    assert result.platform_candidates == []
+    assert result.wall_candidates == []
+
+
+def test_detects_solid_concave_l_shape_as_block(tmp_path):
+    image = tmp_path / 'solid-concave-block.png'
+    points = [(250, 150), (282, 150), (282, 258),
+              (410, 258), (410, 290), (250, 290)]
+    _write_image(image, size=(900, 560), polygons=[(points, True)])
+
+    result = detect(image, tmp_path)
+
+    assert len(result.block_candidates) == 1
+    region = result.block_candidates[0].region
+    gray = cv2.imread(str(image), cv2.IMREAD_GRAYSCALE)
+    dark_coverage = np.mean(gray[region.y:region.y + region.height,
+                                 region.x:region.x + region.width] < 100)
+    assert .35 <= dark_coverage <= .40
+    assert region.x <= 252 and region.x + region.width >= 408
+    assert region.y <= 152 and region.y + region.height >= 288
