@@ -234,18 +234,25 @@ def _has_substantial_hole(mask):
                for contour, (_, _, _, parent) in zip(contours, hierarchy[0]))
 
 
-def _reliable_rectangle_outline(ink, region):
+def _reliable_polygon_outline(ink, gray, region):
     x, y, width, height = region
     if min(width, height) < 18:
         return False
-    mask = ink[y:y + height, x:x + width] > 0
-    band = min(5, min(width, height) // 4)
-    sides = (mask[:, :band].any(axis=1), mask[:, -band:].any(axis=1),
-             mask[:band, :].any(axis=0), mask[-band:, :].any(axis=0))
-    corners = (mask[:band, :band], mask[:band, -band:],
-               mask[-band:, :band], mask[-band:, -band:])
-    return all(float(side.mean()) >= .90 for side in sides) and all(
-        corner.any() for corner in corners)
+    dark = (gray[y:y + height, x:x + width] < 60).astype(np.uint8) * 255
+    if not _has_substantial_hole(dark):
+        return False
+    contours, _ = cv2.findContours(ink[y:y + height, x:x + width],
+                                   cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return False
+    contour = max(contours, key=cv2.contourArea)
+    polygon = cv2.approxPolyDP(contour, .015 * cv2.arcLength(contour, True), True)[:, 0, :]
+    distance = cv2.distanceTransform((dark == 0).astype(np.uint8), cv2.DIST_L2, 3)
+    for start, end in zip(polygon, np.roll(polygon, -1, axis=0)):
+        samples = np.rint(np.linspace(start, end, max(2, int(np.linalg.norm(end-start))))).astype(int)
+        if np.mean(distance[samples[:, 1], samples[:, 0]] <= 3) < .90:
+            return False
+    return len(polygon) >= 3
 
 
 def _blocks(ink, marker_regions, image):
@@ -271,8 +278,6 @@ def _blocks(ink, marker_regions, image):
         fill_ratio = min(1., area / max(1, width * height))
         # 外轮廓面积会包含空心图形内部，因此闭合方框接近 1；旗杆与平台相交形成的
         # 开放细线轮廓则很低，不能把整组线条误当成一个实体。
-        if fill_ratio < .35:
-            continue
         if any(_region_overlap(region, marker) >= .25 for marker in marker_regions):
             continue
         dark_region = (gray[y:y + height, x:x + width] < 100).astype(np.uint8) * 255
@@ -284,12 +289,14 @@ def _blocks(ink, marker_regions, image):
         # 实心图形应有足够暗色面积；空心图形必须在原图深色墨迹中确实围出内部区域。
         # 跨度很大的扁平轮廓仍归类为平台，避免相邻开放长线被阴影桥接成伪 block。
         is_closed_outline = ((not long_flat_outline
-                              or _reliable_rectangle_outline(ink, region))
+                              or _reliable_polygon_outline(ink, gray, region))
                              and (_has_substantial_hole(dark_region)
                                   or _has_substantial_hole(ink_region)))
         # 凹多边形的 bbox 密度可以较低，但实心墨迹面积应与封闭外轮廓面积一致。
-        is_solid_polygon = (dark_fill_ratio >= .35
-                            and dark_fill_ratio >= fill_ratio * .80)
+        interior_distance = cv2.distanceTransform(
+            np.pad(dark_region, 1), cv2.DIST_L2, 3)
+        is_solid_polygon = (dark_fill_ratio >= fill_ratio * .80
+                            and np.count_nonzero(interior_distance >= 6) >= 35)
         if not is_solid_polygon and not is_closed_outline:
             continue
         confidence = min(.97, .72 + .20 * fill_ratio)
@@ -472,12 +479,13 @@ def detect(rectified_path: Path, job_dir: Path) -> DetectionResult:
     tmp.replace(path)
     circles, flags = detect_markers(image)
     contours, _ = cv2.findContours(ink, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    closed_rectangles = [cv2.boundingRect(contour) for contour in contours
-                         if _reliable_rectangle_outline(ink, cv2.boundingRect(contour))]
-    # 细长闭合矩形的短边可能触发伪旗杆；四侧连续且角部相连时不是三角旗。
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    closed_polygons = [cv2.boundingRect(contour) for contour in contours
+                       if _reliable_polygon_outline(ink, gray, cv2.boundingRect(contour))]
+    # 闭合多边形的短边可能触发伪旗杆；可靠闭合边界不是三角旗。
     flags = [flag for flag in flags
              if not any(_region_overlap(flag, region) >= .80
-                        for region in closed_rectangles)]
+                        for region in closed_polygons)]
     marker_regions = [*circles, *flags]
     blocks = _blocks(ink, marker_regions, image)
     block_regions = [(block.region.x, block.region.y, block.region.width, block.region.height)

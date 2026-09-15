@@ -22,12 +22,14 @@ def _write_image(path: Path, size=(420, 300), lines=(), flags=(), circles=(),
         cv2.circle(image, (x, y), radius, (25, 25, 25), width)
     for x1, y1, x2, y2, width in rectangles:
         cv2.rectangle(image, (x1, y1), (x2, y2), (25, 25, 25), width)
-    for points, filled in polygons:
+    for polygon in polygons:
+        points, filled = polygon[:2]
+        pen_width = polygon[2] if len(polygon) > 2 else 5
         contour = np.asarray(points, dtype=np.int32)
         if filled:
             cv2.fillPoly(image, [contour], (25, 25, 25))
         else:
-            cv2.polylines(image, [contour], True, (25, 25, 25), 5)
+            cv2.polylines(image, [contour], True, (25, 25, 25), pen_width)
     cv2.imwrite(str(path), image)
 
 
@@ -461,5 +463,30 @@ def test_detects_exact_low_density_solid_concave_polygon_as_block(tmp_path):
     result = detect(image, tmp_path)
 
     assert len(result.block_candidates) == 1
+    assert result.platform_candidates == []
+    assert result.wall_candidates == []
+
+
+def test_detects_solid_cross_with_twenty_pixel_arms_as_block(tmp_path):
+    image = tmp_path / 'solid-cross.png'
+    points = [(350, 150), (370, 150), (370, 200), (420, 200),
+              (420, 220), (370, 220), (370, 270), (350, 270),
+              (350, 220), (300, 220), (300, 200), (350, 200)]
+    _write_image(image, size=(900, 560), polygons=[(points, True)])
+
+    result = detect(image, tmp_path)
+
+    assert len(result.block_candidates) == 1
+
+
+def test_detects_long_thin_hollow_parallelogram_without_false_flag(tmp_path):
+    image = tmp_path / 'hollow-parallelogram.png'
+    points = [(250, 180), (550, 180), (570, 230), (270, 230)]
+    _write_image(image, size=(900, 560), polygons=[(points, False, 7)])
+
+    result = detect(image, tmp_path)
+
+    assert len(result.block_candidates) == 1
+    assert result.goal_candidates == []
     assert result.platform_candidates == []
     assert result.wall_candidates == []
