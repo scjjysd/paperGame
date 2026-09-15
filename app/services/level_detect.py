@@ -287,7 +287,10 @@ def _blocks(ink, marker_regions, image):
                               or _reliable_rectangle_outline(ink, region))
                              and (_has_substantial_hole(dark_region)
                                   or _has_substantial_hole(ink_region)))
-        if dark_fill_ratio < .45 and not is_closed_outline:
+        # 凹多边形的 bbox 密度可以较低，但实心墨迹面积应与封闭外轮廓面积一致。
+        is_solid_polygon = (dark_fill_ratio >= .35
+                            and dark_fill_ratio >= fill_ratio * .80)
+        if not is_solid_polygon and not is_closed_outline:
             continue
         confidence = min(.97, .72 + .20 * fill_ratio)
         found.append((region, confidence))

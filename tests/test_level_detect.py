@@ -450,3 +450,16 @@ def test_detects_solid_concave_l_shape_as_block(tmp_path):
     assert .35 <= dark_coverage <= .40
     assert region.x <= 252 and region.x + region.width >= 408
     assert region.y <= 152 and region.y + region.height >= 288
+
+
+def test_detects_exact_low_density_solid_concave_polygon_as_block(tmp_path):
+    image = tmp_path / 'exact-low-density-concave-block.png'
+    points = [(300, 150), (420, 150), (420, 175),
+              (325, 175), (325, 270), (300, 270)]
+    _write_image(image, size=(900, 560), polygons=[(points, True)])
+
+    result = detect(image, tmp_path)
+
+    assert len(result.block_candidates) == 1
+    assert result.platform_candidates == []
+    assert result.wall_candidates == []
