@@ -8,6 +8,18 @@
 
 **技术栈：** Python、OpenCV、NumPy、pytest、既有 Unity BoxCollider2D。
 
+## 执行记录
+
+- [x] 检测、形状拆分、发布与 v4 缓存实现，完成红灯及绿灯验证。
+- [x] 补充必要的 Unity 全矩形兼容：服务端和客户端都不再要求非空线平台，但仍拒绝没有任何碰撞几何的关卡。停止调试面板的运行时可达性分析，保留跳跃高度调节。
+- [x] 原始上传 JPEG 端到端解析为 `ready`：13 个矩形、0 条重复平台线、0 条独立墙线；两个 L 形各有两个矩形，凹角空白保持。
+- [x] 本地自审和工作区归属核对，未提交用户原有 UI、拍照、配置和加载日志改动。
+- [ ] 独立代理规格与质量审查：实现代理完成红灯和拆分模块初稿后遇到账户额度限制，主控接手继续实现与自审；独立代理审查仍未完成，不将其表述为已通过。
+
+最终服务端功能回归为 462 通过、3 跳过、1 排除；排除的是已有 WebGL 竖屏模板测试，完整回归此前已确认该失败。Unity 新几何及数据相关测试为 29/29 通过（`/private/tmp/c1-shape-final.xml`），C1 全量为 102/105，已有服务地址配置、脚底位置断言、首页 Prefab 三项失败未修改（`/private/tmp/c1-shape-all.xml`）。测试在独立文件副本执行，生产实现仍直接修改原工程。
+
+真实上传回归素材为 `testdata/levels/real/shape-preserving-source.jpg`，前次保存背景为 `shape-preserving-rectangles.png`；真实解析叠加图为 `/private/tmp/shape-verify.W17WbE/overlay.png`。需要更新服务端、重启 API/Worker、重新构建客户端，再重新上传生成 v4 任务；旧保存 JSON 不自动补出新几何。
+
 ## 任务 1：检测、拆分与发布的耦合修正
 
 **文件：** 新增 `app/services/level_shape_rectangles.py`、`tests/test_level_shape_rectangles.py`；修改 `app/services/level_detect.py`、`app/services/level_parser.py`、`app/level_contracts.py` 及对应测试；新增真实图片回归素材到 `testdata/levels/real`。

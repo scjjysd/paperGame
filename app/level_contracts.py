@@ -134,13 +134,15 @@ class Level(ContractModel):
     canvas: Canvas
     background: Background
     playerStart: PlayerStart
-    platforms: List[Platform] = Field(min_length=1)
+    platforms: List[Platform] = Field(default_factory=list)
     walls: List[Wall] = Field(default_factory=list)
     blocks: List[Block] = Field(default_factory=list)
     goalRegion: Region
 
     @model_validator(mode='after')
     def validate_geometry(self):
+        if not (self.platforms or self.walls or self.blocks):
+            raise ValueError('level requires at least one collision geometry')
         if self.background.width != self.canvas.width or self.background.height != self.canvas.height:
             raise ValueError('background dimensions must match canvas dimensions')
 
@@ -300,7 +302,7 @@ def canonical_profile_json(profile: PlayabilityProfile) -> bytes:
 
 
 def derive_level_job_id(content: bytes, profile: PlayabilityProfile) -> str:
-    # v3 增加墙与实体几何，不复用旧识别结果。
+    # v4 保留凹形并拆分矩形，不复用旧外接框识别结果。
     digest = hashlib.sha256(content + canonical_profile_json(profile) + ALGORITHM_MAJOR_VERSION.encode('ascii')
-                            + b':explicit-markers-v3').hexdigest()
+                            + b':explicit-markers-v4').hexdigest()
     return 'level_' + digest[:12]

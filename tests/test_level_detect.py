@@ -41,6 +41,19 @@ def _endpoint_error(candidate, truth):
     return min(direct, reverse) / 2
 
 
+def _assert_polygon_coverage(result, points, size=(900, 560)):
+    truth = np.zeros((size[1], size[0]), np.uint8)
+    cv2.fillPoly(truth, [np.asarray(points, np.int32)], 255)
+    actual = np.zeros_like(truth)
+    for block in result.block_candidates:
+        r = block.region
+        actual[r.y:r.y+r.height, r.x:r.x+r.width] = 255
+    assert 1 <= len(result.block_candidates) <= 32
+    assert np.count_nonzero((actual > 0) & (truth > 0)) >= np.count_nonzero(truth)*.80
+    allowed = cv2.dilate(truth, np.ones((25, 25), np.uint8))
+    assert not np.any((actual > 0) & (allowed == 0))
+
+
 def test_golden_c1levels_detects_seven_platforms_with_endpoint_accuracy(tmp_path):
     root = Path(__file__).resolve().parents[1]
     image = root / 'testdata' / 'levels' / 'golden' / 'level1-background.png'
@@ -172,10 +185,7 @@ def test_detects_filled_non_triangle_polygon_as_block(tmp_path):
 
     result = detect(image, tmp_path)
 
-    assert len(result.block_candidates) == 1
-    region = result.block_candidates[0].region
-    assert region.x <= 472 and region.x + region.width >= 608
-    assert region.y <= 147 and region.y + region.height >= 268
+    _assert_polygon_coverage(result, points)
 
 
 def test_circle_marker_is_not_geometry(tmp_path):
@@ -235,7 +245,7 @@ def test_detects_filled_triangle_as_block_when_it_is_not_a_marker(tmp_path):
     result = detect(image, tmp_path)
 
     assert result.goal_candidates == []
-    assert len(result.block_candidates) == 1
+    _assert_polygon_coverage(result, [(300, 150), (390, 270), (210, 270)])
 
 
 @pytest.mark.parametrize(('length', 'expected_count'), [(55, 0), (56, 1)])
@@ -372,7 +382,7 @@ def test_shape_covering_most_of_canvas_is_not_a_block(tmp_path):
     assert result.block_candidates == []
 
 
-def test_cropped_real_photo_keeps_all_fifteen_platforms(tmp_path):
+def test_cropped_real_photo_keeps_lines_and_actual_rectangle_geometry(tmp_path):
     from app.services.level_rectify import normalize_visible_canvas
 
     root = Path(__file__).resolve().parents[1]
@@ -381,7 +391,8 @@ def test_cropped_real_photo_keeps_all_fifteen_platforms(tmp_path):
 
     result = detect(rectified.rectified_path, tmp_path / 'detect')
 
-    assert len(result.platform_candidates) == 15
+    assert len(result.platform_candidates) == 9
+    assert len(result.block_candidates) == 3
     false_regions = {(252, 447, 199, 39), (40, 492, 207, 41)}
     actual_regions = {(block.region.x, block.region.y,
                        block.region.width, block.region.height)
@@ -444,14 +455,10 @@ def test_detects_solid_concave_l_shape_as_block(tmp_path):
 
     result = detect(image, tmp_path)
 
-    assert len(result.block_candidates) == 1
-    region = result.block_candidates[0].region
-    gray = cv2.imread(str(image), cv2.IMREAD_GRAYSCALE)
-    dark_coverage = np.mean(gray[region.y:region.y + region.height,
-                                 region.x:region.x + region.width] < 100)
-    assert .35 <= dark_coverage <= .40
-    assert region.x <= 252 and region.x + region.width >= 408
-    assert region.y <= 152 and region.y + region.height >= 288
+    assert len(result.block_candidates) == 2
+    _assert_polygon_coverage(result, points)
+    assert not any(b.region.x <= 350 < b.region.x+b.region.width and
+                   b.region.y <= 200 < b.region.y+b.region.height for b in result.block_candidates)
 
 
 def test_detects_exact_low_density_solid_concave_polygon_as_block(tmp_path):
@@ -462,7 +469,8 @@ def test_detects_exact_low_density_solid_concave_polygon_as_block(tmp_path):
 
     result = detect(image, tmp_path)
 
-    assert len(result.block_candidates) == 1
+    assert len(result.block_candidates) == 2
+    _assert_polygon_coverage(result, points)
     assert result.platform_candidates == []
     assert result.wall_candidates == []
 
@@ -476,7 +484,8 @@ def test_detects_solid_cross_with_twenty_pixel_arms_as_block(tmp_path):
 
     result = detect(image, tmp_path)
 
-    assert len(result.block_candidates) == 1
+    assert 3 <= len(result.block_candidates) <= 4
+    _assert_polygon_coverage(result, points)
 
 
 def test_detects_long_thin_hollow_parallelogram_without_false_flag(tmp_path):
@@ -486,7 +495,7 @@ def test_detects_long_thin_hollow_parallelogram_without_false_flag(tmp_path):
 
     result = detect(image, tmp_path)
 
-    assert len(result.block_candidates) == 1
+    _assert_polygon_coverage(result, points)
     assert result.goal_candidates == []
     assert result.platform_candidates == []
     assert result.wall_candidates == []

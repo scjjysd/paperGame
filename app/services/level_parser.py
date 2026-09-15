@@ -199,9 +199,13 @@ def _collision_geometry(detection: Any, ink: np.ndarray,
         if (not MIN_PUBLISH_CONFIDENCE <= block.confidence <= 1 or r.width <= 0 or r.height <= 0
                 or r.x < 0 or r.y < 0 or r.x + r.width > width or r.y + r.height > height):
             continue
-        # 任意多边形的外接矩形四边可能没有墨迹；形状证据由检测层负责，
-        # 发布层仅确认候选区域仍有墨迹，不能把 bbox 密度当成形状门禁。
-        if not ink[r.y:r.y + r.height, r.x:r.x + r.width].any():
+        # 拆分后的内部矩形可以没有轮廓墨迹，但必须有检测层的主体证据。
+        # 无主体证据的历史候选仍要求区域内存在墨迹。
+        evidence = getattr(block, 'evidence', None)
+        verified_shape = evidence is not None and evidence.supports((r.x, r.y, r.width, r.height))
+        if evidence is not None and not verified_shape:
+            continue
+        if not verified_shape and not ink[r.y:r.y + r.height, r.x:r.x + r.width].any():
             continue
         if any((max(0, min(r.x + r.width, b.region.x + b.region.width) - max(r.x, b.region.x))
                 * max(0, min(r.y + r.height, b.region.y + b.region.height) - max(r.y, b.region.y)))
@@ -281,10 +285,10 @@ def _publish_review_artifacts(job_dir: Path, reason: str, candidates: Sequence[A
     _atomic_json(job_dir / 'analysis.json', analysis)
 
 
-def _pre_review(semantic: Any) -> Optional[str]:
+def _pre_review(semantic: Any, has_collision_geometry: bool = False) -> Optional[str]:
     if semantic.review_reasons:
         return 'AMBIGUOUS_GOAL' if 'AMBIGUOUS_GOAL' in semantic.review_reasons else 'LOW_CONFIDENCE'
-    if not semantic.platforms:
+    if not semantic.platforms and not has_collision_geometry:
         return 'NO_PLATFORM_DETECTED'
     if not semantic.goals:
         return 'GOAL_NOT_FOUND'
@@ -362,7 +366,9 @@ def parse(job_dir: Path, progress: Progress = None,
         return {'jobId': job_id, 'status': 'failed', 'createdAt': created, 'updatedAt': updated,
                 'error': {'code': marker_error, 'message': LEVEL_ERROR_MESSAGES[marker_error],
                           'retryable': False, 'requestId': 'req_' + job_id}}
-    reason = _pre_review(semantic)
+    ink = cv2.imread(str(detection.ink_mask_path), cv2.IMREAD_GRAYSCALE)
+    walls, blocks = _collision_geometry(detection, ink, rectified.width, rectified.height) if ink is not None else ([], [])
+    reason = _pre_review(semantic, bool(walls or blocks))
     if reason:
         candidates = semantic.goals if reason in ('GOAL_NOT_FOUND', 'AMBIGUOUS_GOAL') else semantic.platforms
         _publish_review_artifacts(job_dir, reason, candidates, rectified.rectified_path, progress)
@@ -384,7 +390,6 @@ def parse(job_dir: Path, progress: Progress = None,
              'confidence': starts[0].confidence}
 
     background_url = _artifact_url(job_id, 'rectified.png')
-    walls, blocks = _collision_geometry(detection, ink, rectified.width, rectified.height)
     level_data = {'schemaVersion': SCHEMA_VERSION,
                   'coordinateSystem': {'origin': 'top_left', 'xAxis': 'right',
                                        'yAxis': 'down', 'unit': 'pixel'},

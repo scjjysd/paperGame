@@ -57,12 +57,16 @@ def test_visible_canvas_jobs_do_not_reuse_old_marker_cache():
     assert derive_level_job_id(b'image', DEFAULT_PLAYABILITY_PROFILE) != 'level_' + old_digest[:12]
 
 
-def test_geometry_v3_jobs_do_not_reuse_v2_cache():
+def test_shape_geometry_v4_jobs_do_not_reuse_v3_cache():
     import hashlib
     expected_digest = hashlib.sha256(b'image' + canonical_profile_json(DEFAULT_PLAYABILITY_PROFILE)
                                      + ALGORITHM_MAJOR_VERSION.encode('ascii')
-                                     + b':explicit-markers-v3').hexdigest()
+                                     + b':explicit-markers-v4').hexdigest()
     assert derive_level_job_id(b'image', DEFAULT_PLAYABILITY_PROFILE) == 'level_' + expected_digest[:12]
+    previous_digest = hashlib.sha256(b'image' + canonical_profile_json(DEFAULT_PLAYABILITY_PROFILE)
+                                     + ALGORITHM_MAJOR_VERSION.encode('ascii')
+                                     + b':explicit-markers-v3').hexdigest()
+    assert derive_level_job_id(b'image', DEFAULT_PLAYABILITY_PROFILE) != 'level_' + previous_digest[:12]
 
 
 def test_ready_contract_accepts_skipped_playability():
@@ -102,6 +106,14 @@ def test_level_defaults_walls_and_blocks_to_empty_lists():
     level = Level.model_validate(_level_data())
     assert level.walls == []
     assert level.blocks == []
+
+
+def test_blocks_only_level_is_valid_geometry():
+    data = _level_data()
+    data['platforms'] = []
+    data['blocks'] = [{'id': 'block_001', 'region': {
+        'x': 10, 'y': 50, 'width': 50, 'height': 20, 'confidence': .9}}]
+    assert len(Level.model_validate(data).blocks) == 1
 
 
 def test_level_accepts_valid_walls_and_blocks():

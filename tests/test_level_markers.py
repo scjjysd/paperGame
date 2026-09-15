@@ -172,12 +172,12 @@ def test_real_hand_drawn_photo_generates_level(tmp_path, monkeypatch):
     assert result.result.level.goalRegion.width > 0
 
 
-@pytest.mark.parametrize('filename,start_x,goal_x,platform_count', [
-    ('cropped-paper-markers.jpg', 82, 808, 15),
-    ('rolled-page-markers.jpg', 199, 690, 9),
+@pytest.mark.parametrize('filename,start_x,goal_x,platform_count,block_count', [
+    ('cropped-paper-markers.jpg', 82, 808, 9, 3),
+    ('rolled-page-markers.jpg', 199, 690, 11, 2),
 ])
 def test_real_photo_without_four_visible_paper_edges_generates_level(
-        tmp_path, monkeypatch, filename, start_x, goal_x, platform_count):
+        tmp_path, monkeypatch, filename, start_x, goal_x, platform_count, block_count):
     from app.level_contracts import LevelReady
     from app.services.level_parser import parse
 
@@ -194,6 +194,7 @@ def test_real_photo_without_four_visible_paper_edges_generates_level(
     assert abs(result.result.level.goalRegion.x - goal_x) <= 10
     assert result.result.level.goalRegion.width > 0
     assert len(result.result.level.platforms) == platform_count
+    assert len(result.result.level.blocks) == block_count
 
 
 def test_image_without_edges_or_markers_fails_for_missing_markers(tmp_path, monkeypatch):

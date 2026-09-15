@@ -12,6 +12,7 @@ from typing import List, Sequence, Tuple
 import cv2
 import numpy as np
 from app.services.level_markers import detect_markers
+from app.services.level_shape_rectangles import ShapeEvidence, shape_rectangles
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +52,7 @@ class BlockCandidate:
     id: str
     region: RegionCandidate
     confidence: float
+    evidence: ShapeEvidence | None = field(default=None, compare=False, repr=False)
 
 @dataclass(frozen=True)
 class DetectionResult:
@@ -269,64 +271,84 @@ def _has_triangular_hole(mask):
 
 
 def _blocks(ink, marker_regions, image):
-    h, w = ink.shape
+    """用局部对比度复核闭合/实心主体；分解凹形而不是填满外接框。"""
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    height, width = ink.shape
     contours, _ = cv2.findContours(ink, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     found = []
-    min_dimension = max(18, int(min(h, w) * .03))
     for contour in contours:
-        perimeter = cv2.arcLength(contour, True)
-        area = abs(cv2.contourArea(contour))
-        if perimeter <= 0 or area < min_dimension ** 2:
+        x, y, w, h = cv2.boundingRect(contour)
+        if (min(w, h) < 8 or w*h > width*height*.35 or
+                x <= 5 or y <= 5 or x+w >= width-5 or y+h >= height-5):
             continue
-        x, y, width, height = cv2.boundingRect(contour)
-        region = (x, y, width, height)
-        if min(width, height) < min_dimension or width * height > w * h * .35:
+        left, top = max(0, x-8), max(0, y-8)
+        right, bottom = min(width, x+w+8), min(height, y+h+8)
+        roi = gray[top:bottom, left:right]
+        threshold, _ = cv2.threshold(roi, 0, 255, cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU)
+        if float(np.percentile(roi, 90)) - threshold < 12:
             continue
-        if x <= 5 or y <= 5 or x + width >= w - 5 or y + height >= h - 5:
-            continue
-        polygon = cv2.approxPolyDP(contour, .025 * perimeter, True)
-        if len(polygon) < 3:
-            continue
-        fill_ratio = min(1., area / max(1, width * height))
-        # 外轮廓面积会包含空心图形内部，因此闭合方框接近 1；旗杆与平台相交形成的
-        # 开放细线轮廓则很低，不能把整组线条误当成一个实体。
-        if any(_region_overlap(region, marker) >= .25 for marker in marker_regions):
-            continue
-        region_gray = gray[y:y + height, x:x + width].copy()
-        ink_region = ink[y:y + height, x:x + width].copy()
-        # marker 的旗面厚墨/内孔不能成为整组相连平台的实体证据。
+        dark = (roi <= threshold).astype(np.uint8)*255
+        dark = cv2.morphologyEx(dark, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
+        shape = np.zeros_like(dark)
+        contrast = (roi < float(np.percentile(roi, 90))-20).astype(np.uint8)*255
+        distance_to_contrast = cv2.distanceTransform((contrast == 0).astype(np.uint8), cv2.DIST_L2, 3)
+        masks = [cv2.morphologyEx(dark, cv2.MORPH_CLOSE, np.ones((k, k), np.uint8)) for k in (3, 7)]
+        masks.append(ink[top:bottom, left:right])
+        for mask_index, closed in enumerate(masks):
+            cs, hierarchy = cv2.findContours(closed, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
+            if hierarchy is None:
+                continue
+            for c, (_, _, _, parent) in zip(cs, hierarchy[0]):
+                cx, cy, cw, ch = cv2.boundingRect(c)
+                region = (left+cx, top+cy, cw, ch)
+                if parent < 0 or cv2.contourArea(c) < 60 or max(cw, ch) < 40:
+                    continue
+                if mask_index == 2:
+                    polygon = cv2.approxPolyDP(c, 2, True)[:, 0, :]
+                    reliable = True
+                    for a, b in zip(polygon, np.roll(polygon, -1, axis=0)):
+                        samples = np.rint(np.linspace(a, b, max(2, int(np.linalg.norm(b-a))))).astype(int)
+                        if np.mean(distance_to_contrast[samples[:, 1], samples[:, 0]] <= 3) < .90:
+                            reliable = False
+                            break
+                    if not reliable:
+                        continue
+                if any(_region_overlap(region, marker) >= .50 and
+                       region[1]+region[3]*.5 < marker[1]+marker[3]*.65
+                       for marker in marker_regions):
+                    continue
+                # 多尺度小缺口补全取并集，避免大核吞掉真实细框内部。
+                cv2.drawContours(shape, [c], -1, 255, -1)
+        component = np.zeros_like(dark)
+        cv2.drawContours(component, [contour-np.array([[[left, top]]])], -1, 255, -1)
+        solid = cv2.bitwise_and(dark, component)
         for mx, my, mw, mh in marker_regions:
-            left, right = max(x, mx) - x, min(x + width, mx + mw) - x
-            top, bottom = max(y, my) - y, min(y + height, my + mh) - y
-            if right > left and bottom > top:
-                region_gray[top:bottom, left:right] = 255
-                ink_region[top:bottom, left:right] = 0
-        dark_region = (region_gray < 100).astype(np.uint8) * 255
-        dark_fill_ratio = float(np.count_nonzero(dark_region)) / max(1, width * height)
-        aspect_ratio = max(width, height) / max(1, min(width, height))
-        long_flat_outline = (aspect_ratio >= 4.5
-                             and max(width, height) >= min(h, w) * .35)
-        # 实心图形应有足够暗色面积；空心图形必须在原图深色墨迹中确实围出内部区域。
-        # 跨度很大的扁平轮廓仍归类为平台，避免相邻开放长线被阴影桥接成伪 block。
-        is_closed_outline = ((not long_flat_outline
-                              or _reliable_polygon_outline(ink_region, region_gray,
-                                                           (0, 0, width, height)))
-                             and (_has_substantial_hole(dark_region)
-                                  or _has_substantial_hole(ink_region)))
-        # 凹多边形的 bbox 密度可以较低，但实心墨迹面积应与封闭外轮廓面积一致。
-        interior_distance = cv2.distanceTransform(
-            np.pad(dark_region, 1), cv2.DIST_L2, 3)
-        is_solid_polygon = (dark_fill_ratio >= fill_ratio * .80
-                            and np.count_nonzero(interior_distance >= 6) >= 35)
-        if not is_solid_polygon and not is_closed_outline:
+            a, b = max(0, mx-left), max(0, my-top)
+            c, d = min(solid.shape[1], mx+mw-left), min(solid.shape[0], my+mh-top)
+            if c > a and d > b:
+                solid[b:d, a:c] = 0
+        depth = cv2.distanceTransform(np.pad(solid, 1), cv2.DIST_L2, 3)
+        is_solid = (np.count_nonzero(solid) >= cv2.contourArea(contour)*.80 and
+                    np.count_nonzero(depth >= 6) >= 35)
+        if is_solid:
+            shape = solid
+        if shape.any():
+            # 只纳入内孔附近的真实边界；旗杆/小字等附着笔画不扩张实体。
+            if not is_solid:
+                near = cv2.dilate(shape, np.ones((7, 7), np.uint8))
+                shape = cv2.bitwise_or(shape, cv2.bitwise_and(dark, near))
+        else:
             continue
-        confidence = min(.97, .72 + .20 * fill_ratio)
-        found.append((region, confidence))
-    found.sort(key=lambda item: (item[0][1], item[0][0]))
-    return [BlockCandidate(f'block_{index:03d}',
-                           RegionCandidate(*region, confidence), confidence)
-            for index, (region, confidence) in enumerate(found, 1)]
+        rectangles = shape_rectangles(shape, hand_drawn=True)
+        if not rectangles:
+            continue
+        regions = tuple((left+a, top+b, rw, rh) for a, b, rw, rh in rectangles)
+        evidence = ShapeEvidence(left, top, shape, dark, regions)
+        for region in regions:
+            found.append((region, evidence))
+    found.sort(key=lambda item: (item[0][1], item[0][0], item[0][2:]))
+    return [BlockCandidate(f'block_{i:03d}', RegionCandidate(*region, .85), .85, evidence)
+            for i, (region, evidence) in enumerate(found, 1)]
 
 
 def _is_line_allowed(start, end, marker_regions, block_regions, threshold=.45):
@@ -516,10 +538,15 @@ def detect(rectified_path: Path, job_dir: Path) -> DetectionResult:
                         for region in closed_polygons)]
     marker_regions = [*circles, *flags]
     blocks = _blocks(ink, marker_regions, image)
-    block_regions = [(block.region.x, block.region.y, block.region.width, block.region.height)
-                     for block in blocks]
-    platforms = _platforms(ink, red, image, marker_regions, block_regions)
-    walls = _walls(ink, image, marker_regions, block_regions)
+    line_ink = ink.copy()
+    for block in blocks:
+        evidence = block.evidence
+        if evidence is not None:
+            eh, ew = evidence.mask.shape
+            roi = line_ink[evidence.y:evidence.y+eh, evidence.x:evidence.x+ew]
+            roi[cv2.dilate(evidence.mask, np.ones((17, 17), np.uint8)) > 0] = 0
+    platforms = _platforms(line_ink, red, image, marker_regions)
+    walls = _walls(line_ink, image, marker_regions)
     goals = [GoalCandidate(f'goal_{i:03d}', RegionCandidate(x, y, w, h, .9), .9)
              for i, (x, y, w, h) in enumerate(flags, 1)]
     starts = [PointCandidate(x + w // 2, y + h - 1, .9) for x, y, w, h in circles]
