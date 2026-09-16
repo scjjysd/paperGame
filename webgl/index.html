@@ -19,7 +19,7 @@
         <div id="unity-progress-bar-full"></div>
       </div>
       <div id="unity-warning"></div>
-      <div id="build-time">出包时间：2026-09-16 16:44:20 UTC+8</div>
+      <div id="build-time">出包时间：2026-09-16 17:04:05 UTC+8</div>
     </div>
     <button id="fullscreen-btn" onclick="enterFullscreen()">全屏</button>
 
@@ -53,12 +53,19 @@
       }
 
       // CSS 旋转后的包围盒是竖向的，渲染缓冲必须使用旋转前的横向布局尺寸。
+      var resizeScheduled = false;
       function resizeUnityCanvas() {
-        var dpr = window.devicePixelRatio || 1;
-        var width = Math.max(1, Math.round(canvas.clientWidth * dpr));
-        var height = Math.max(1, Math.round(canvas.clientHeight * dpr));
-        if (canvas.width !== width) { canvas.width = width; }
-        if (canvas.height !== height) { canvas.height = height; }
+        if (resizeScheduled) { return; }
+        resizeScheduled = true;
+        requestAnimationFrame(function () {
+          resizeScheduled = false;
+          var dpr = window.devicePixelRatio || 1;
+          var width = Math.max(1, Math.round(canvas.clientWidth * dpr));
+          var height = Math.max(1, Math.round(canvas.clientHeight * dpr));
+          // 仅在尺寸实际变化时重设，避免旋转过程中反复清空 WebGL 缓冲导致闪烁
+          if (canvas.width !== width) { canvas.width = width; }
+          if (canvas.height !== height) { canvas.height = height; }
+        });
       }
       resizeUnityCanvas();
       window.addEventListener("resize", resizeUnityCanvas);

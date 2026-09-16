@@ -155,6 +155,7 @@ const document = {
   addEventListener, body: element(), documentElement: element()
 };
 const context = {window, document, console, setTimeout,
+  requestAnimationFrame: (callback) => callback(),
   ResizeObserver: class {
     constructor(callback) { observerCallback = callback; }
     observe(target) { assert.equal(target, canvas); }
