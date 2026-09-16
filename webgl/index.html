@@ -19,12 +19,13 @@
         <div id="unity-progress-bar-full"></div>
       </div>
       <div id="unity-warning"></div>
-      <div id="build-time">出包时间：2026-09-16 17:04:05 UTC+8</div>
+      <div id="build-time">出包时间：2026-09-16 18:26:27 UTC+8</div>
     </div>
     <button id="fullscreen-btn" onclick="enterFullscreen()">全屏</button>
 
     <script>
       var canvas = document.querySelector("#unity-canvas");
+      var container = document.querySelector("#unity-container");
       var loadingBar = document.querySelector("#unity-loading-bar");
       var progressBarFull = document.querySelector("#unity-progress-bar-full");
       var warningBanner = document.querySelector("#unity-warning");
@@ -52,25 +53,61 @@
         fullscreenBtn.style.display = "none";
       }
 
-      // CSS 旋转后的包围盒是竖向的，渲染缓冲必须使用旋转前的横向布局尺寸。
-      var resizeScheduled = false;
-      function resizeUnityCanvas() {
-        if (resizeScheduled) { return; }
-        resizeScheduled = true;
-        requestAnimationFrame(function () {
-          resizeScheduled = false;
-          var dpr = window.devicePixelRatio || 1;
-          var width = Math.max(1, Math.round(canvas.clientWidth * dpr));
-          var height = Math.max(1, Math.round(canvas.clientHeight * dpr));
-          // 仅在尺寸实际变化时重设，避免旋转过程中反复清空 WebGL 缓冲导致闪烁
-          if (canvas.width !== width) { canvas.width = width; }
-          if (canvas.height !== height) { canvas.height = height; }
-        });
+      // 固定横屏逻辑舞台。视口变化只做等比矩阵变换，不改变 WebGL 渲染缓冲。
+      var stageWidth = 1;
+      var stageHeight = 1;
+      var unityPortrait = false;
+
+      function viewportSize() {
+        var viewport = window.visualViewport;
+        return {
+          width: viewport ? viewport.width : window.innerWidth,
+          height: viewport ? viewport.height : window.innerHeight
+        };
       }
-      resizeUnityCanvas();
-      window.addEventListener("resize", resizeUnityCanvas);
-      if (typeof ResizeObserver !== "undefined") {
-        new ResizeObserver(resizeUnityCanvas).observe(canvas);
+
+      function layoutUnityStage() {
+        var viewport = viewportSize();
+        var viewportWidth = Math.max(1, viewport.width);
+        var viewportHeight = Math.max(1, viewport.height);
+        unityPortrait = viewportHeight > viewportWidth;
+
+        var scale;
+        var offsetX;
+        var offsetY;
+        if (unityPortrait) {
+          scale = Math.min(viewportWidth / stageHeight, viewportHeight / stageWidth);
+          offsetX = (viewportWidth - stageHeight * scale) / 2;
+          offsetY = (viewportHeight - stageWidth * scale) / 2;
+          container.style.transform = 'matrix(' + [
+            0, scale, -scale, 0, offsetX + stageHeight * scale, offsetY
+          ].join(',') + ')';
+        } else {
+          scale = Math.min(viewportWidth / stageWidth, viewportHeight / stageHeight);
+          offsetX = (viewportWidth - stageWidth * scale) / 2;
+          offsetY = (viewportHeight - stageHeight * scale) / 2;
+          container.style.transform = 'matrix(' + [
+            scale, 0, 0, scale, offsetX, offsetY
+          ].join(',') + ')';
+        }
+      }
+
+      function initializeUnityCanvas() {
+        var viewport = viewportSize();
+        stageWidth = Math.max(viewport.width, viewport.height);
+        stageHeight = Math.min(viewport.width, viewport.height);
+        container.style.width = stageWidth + 'px';
+        container.style.height = stageHeight + 'px';
+        layoutUnityStage();
+
+        var dpr = window.devicePixelRatio || 1;
+        canvas.width = Math.max(1, Math.round(stageWidth * dpr));
+        canvas.height = Math.max(1, Math.round(stageHeight * dpr));
+      }
+      initializeUnityCanvas();
+      window.addEventListener("resize", layoutUnityStage);
+      if (window.visualViewport) {
+        window.visualViewport.addEventListener("resize", layoutUnityStage);
       }
 
       // Unity 按包围盒归一化输入；先逆旋转，再映射回同一个包围盒坐标系。
@@ -98,7 +135,7 @@
         var targetsCanvas = event.target === canvas || unityMouseDown;
         if (event.type === "mousedown") { unityMouseDown = event.target === canvas; }
         if (event.type === "mouseup") { unityMouseDown = false; }
-        if (!targetsCanvas || !window.matchMedia("(orientation: portrait)").matches) { return; }
+        if (!targetsCanvas || !unityPortrait) { return; }
         var rect = canvas.getBoundingClientRect();
         if (!rect.width || !rect.height) { return; }
         var values = event.changedTouches ? {

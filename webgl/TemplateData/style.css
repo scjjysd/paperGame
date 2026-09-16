@@ -15,7 +15,11 @@ body {
   height: 100vh;
   width: 100dvw;
   height: 100dvh;
+  transform: translate3d(0, 0, 0);
+  transform-origin: top left;
+  backface-visibility: hidden;
   will-change: transform;
+  transition: none !important;
 }
 
 #unity-canvas {
@@ -82,27 +86,6 @@ body {
 #unity-warning .error {
   color: #fff;
   background: #c62828;
-}
-
-/* 竖屏时强制旋转 90° 横屏显示 */
-@media (orientation: portrait) {
-  #unity-container {
-    width: 100vh;
-    height: 100vw;
-    width: 100dvh;
-    height: 100dvw;
-    transform: rotate(90deg);
-    transform-origin: top left;
-    position: absolute;
-    top: 0;
-    left: 100vw;
-    left: 100dvw;
-  }
-}
-
-/* 禁用旋转时的过渡动画，避免闪烁 */
-#unity-container {
-  transition: none !important;
 }
 
 /* 全屏按钮：右上角小按钮，点击后自动隐藏 */
