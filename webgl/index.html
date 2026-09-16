@@ -52,6 +52,62 @@
         fullscreenBtn.style.display = "none";
       }
 
+      // CSS 旋转后的包围盒是竖向的，渲染缓冲必须使用旋转前的横向布局尺寸。
+      function resizeUnityCanvas() {
+        var dpr = window.devicePixelRatio || 1;
+        var width = Math.max(1, Math.round(canvas.clientWidth * dpr));
+        var height = Math.max(1, Math.round(canvas.clientHeight * dpr));
+        if (canvas.width !== width) { canvas.width = width; }
+        if (canvas.height !== height) { canvas.height = height; }
+      }
+      resizeUnityCanvas();
+      window.addEventListener("resize", resizeUnityCanvas);
+      if (typeof ResizeObserver !== "undefined") {
+        new ResizeObserver(resizeUnityCanvas).observe(canvas);
+      }
+
+      // Unity 按包围盒归一化输入；先逆旋转，再映射回同一个包围盒坐标系。
+      function unityPointerPosition(point, rect) {
+        var x = rect.left + (point.clientY - rect.top) * rect.width / rect.height;
+        var y = rect.top + (rect.right - point.clientX) * rect.height / rect.width;
+        return { clientX: x, clientY: y, pageX: x + window.scrollX, pageY: y + window.scrollY };
+      }
+
+      function unityTouchList(touches, rect) {
+        var list = Array.prototype.map.call(touches, function (touch) {
+          return Object.assign({
+            identifier: touch.identifier, target: touch.target,
+            screenX: touch.screenX, screenY: touch.screenY,
+            radiusX: touch.radiusX, radiusY: touch.radiusY,
+            rotationAngle: touch.rotationAngle, force: touch.force
+          }, unityPointerPosition(touch, rect));
+        });
+        list.item = function (index) { return list[index] || null; };
+        return list;
+      }
+
+      var unityMouseDown = false;
+      function normalizeUnityInput(event) {
+        var targetsCanvas = event.target === canvas || unityMouseDown;
+        if (event.type === "mousedown") { unityMouseDown = event.target === canvas; }
+        if (event.type === "mouseup") { unityMouseDown = false; }
+        if (!targetsCanvas || !window.matchMedia("(orientation: portrait)").matches) { return; }
+        var rect = canvas.getBoundingClientRect();
+        if (!rect.width || !rect.height) { return; }
+        var values = event.changedTouches ? {
+          touches: unityTouchList(event.touches, rect),
+          targetTouches: unityTouchList(event.targetTouches, rect),
+          changedTouches: unityTouchList(event.changedTouches, rect)
+        } : unityPointerPosition(event, rect);
+        // 保留原始可信事件及用户手势，不重新派发，避免重复点击和多点触摸丢失。
+        Object.keys(values).forEach(function (key) {
+          Object.defineProperty(event, key, { configurable: true, value: values[key] });
+        });
+      }
+      ["mousedown", "mousemove", "mouseup", "touchstart", "touchmove", "touchend", "touchcancel"]
+        .forEach(function (type) { document.addEventListener(type, normalizeUnityInput, true); });
+      window.addEventListener("blur", function () { unityMouseDown = false; });
+
       var buildUrl = "Build";
       var loaderUrl = buildUrl + "/C1WebGL.loader.js";
       var config = {
@@ -62,6 +118,7 @@
         companyName: "DefaultCompany",
         productName: "PaperGame",
         productVersion: "0.1",
+        matchWebGLToCanvasSize: false,
         showBanner: unityShowBanner
       };
 
