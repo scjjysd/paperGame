@@ -72,6 +72,8 @@ def _mesh_metrics(vertices, triangles, pin_count: int) -> Dict[str, int]:
         'a1_cols': a1_cols,
         'a1_bytes': a1_rows * a1_cols * 4,
         'g_bytes': (2 * edge_count) * a1_cols * 4,
+        'a2_rows': a2_rows,
+        'a2_cols': a2_cols,
         'a2_bytes': a2_rows * a2_cols * 4,
         'normal1_bytes': a1_cols * a1_cols * 4,
         'normal2_bytes': a2_cols * a2_cols * 4,
@@ -119,7 +121,8 @@ def _logged_animated_drawing_class(animated_drawing):
 
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
-            logger.info('ARAP 构造后：effective_pins=%d，A1=%s/%d bytes，A2=%s/%d bytes',
+            logger.info('ARAP 构造后：effective_pins=%d，A1.shape=%s，A1.nbytes=%d，'
+                        'A2.shape=%s，A2.nbytes=%d',
                         self.arap.pin_num, self.arap.A1.shape, self.arap.A1.nbytes,
                         self.arap.A2.shape, self.arap.A2.nbytes)
     return _LoggedAnimatedDrawing

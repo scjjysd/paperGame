@@ -28,6 +28,53 @@ def test_mesh_metrics_calculates_unique_edges_and_dense_bytes():
     assert metrics['normal2_bytes'] == 4 * 4 * 4
 
 
+def test_logged_animated_drawing_logs_mesh_before_arap_and_actual_matrices_after(caplog):
+    """移动网格 hook 到 ARAP 后会失去 OOM 前的关键诊断日志。"""
+    caplog.set_level(logging.INFO, logger=render_scene.__name__)
+    events = []
+
+    class FakeBase:
+        def __init__(self):
+            self.mask = np.zeros((3, 4), dtype=np.uint8)
+            self.char_cfg = SimpleNamespace(skeleton=[{'name': 'a'}, {'name': 'b'}])
+            self._generate_mesh()
+            events.append('arap.construct')
+            self.arap = SimpleNamespace(
+                pin_num=1,
+                A1=np.zeros((2, 4), dtype=np.float32),
+                A2=np.zeros((1, 2), dtype=np.float32),
+            )
+
+        def _generate_mesh(self):
+            self.mesh = {
+                'vertices': np.zeros((4, 2), dtype=np.float32),
+                'triangles': [np.array([0, 1, 2]), np.array([1, 2, 3])],
+            }
+            events.append('mesh.generated')
+
+    Drawing = render_scene._logged_animated_drawing_class(FakeBase)
+    Drawing()
+
+    messages = [record.getMessage() for record in caplog.records]
+    estimated_index = next(index for index, message in enumerate(messages)
+                           if 'ARAP 构造前' in message)
+    actual_index = next(index for index, message in enumerate(messages)
+                        if 'ARAP 构造后' in message)
+    assert 'mask=4x3' in messages[estimated_index]
+    assert 'vertices=4' in messages[estimated_index]
+    assert 'triangles=2' in messages[estimated_index]
+    assert 'edges=5' in messages[estimated_index]
+    assert 'pins=2' in messages[estimated_index]
+    assert 'A1=14x8/' in messages[estimated_index]
+    assert events.index('mesh.generated') < events.index('arap.construct')
+    assert estimated_index < actual_index
+    assert 'effective_pins=1' in messages[actual_index]
+    assert 'A1.shape=(2, 4)' in messages[actual_index]
+    assert 'A1.nbytes=32' in messages[actual_index]
+    assert 'A2.shape=(1, 2)' in messages[actual_index]
+    assert 'A2.nbytes=8' in messages[actual_index]
+
+
 def test_render_animations_rejects_empty_motion_list(tmp_path):
     """空批次若继续进入 vendor 初始化，会创建无意义的 OpenGL 资源。"""
     with pytest.raises(ValueError, match='至少一个动作'):
