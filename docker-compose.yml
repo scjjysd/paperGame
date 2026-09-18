@@ -39,9 +39,14 @@ services:
     # 注：不采用 devices+count:0 方案——实测无 GPU 宿主机上 count=0 的设备请求
     #     仍会报 "failed to discover GPU vendor from CDI"，故用 runtime 切换实现单文件开关。
     runtime: ${GPU_RUNTIME:-runc}
+    entrypoint: ["/torchserve-entrypoint.sh"]
     environment:
       # 仅 nvidia runtime 下生效；默认全部 GPU，可填具体序号/UUID 限定
       NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
+      # N 分别应用于检测和姿态模型；留空保持 TorchServe 原生默认。
+      TORCHSERVE_WORKERS_PER_MODEL: ${TORCHSERVE_WORKERS_PER_MODEL:-}
+    volumes:
+      - ./docker/torchserve-entrypoint.sh:/torchserve-entrypoint.sh:ro
     ports:
       - "8080:8080"   # TorchServe 推理 API（涂鸦分析：检测/分割/骨架）
       - "8081:8081"   # TorchServe 管理 API
