@@ -61,39 +61,40 @@ class CharacterPipeline:
             char_cfg = char_dir / 'anno' / 'char_cfg.yaml'
 
             motion_renders = []
-            with _timed_stage('synth_motion', char_dir):
-                for m in motions:
-                    out_dir = char_dir / m
+            for m in motions:
+                out_dir = char_dir / m
+                with _timed_stage('synth_motion.%s' % m, char_dir):
                     out_dir.mkdir(parents=True, exist_ok=True)
                     motion_renders.append((m, synth_motion(char_cfg, m, out_dir),
                                            out_dir / f'{m}.gif'))
-            gifs = render_animations(char_dir / 'anno', motion_renders)
+            with _timed_stage('render_animations', char_dir):
+                gifs = render_animations(char_dir / 'anno', motion_renders)
 
-            with _timed_stage('sprite_sheet', char_dir):
-                # 测量每个动画的内容尺寸，计算缩放到统一目标高度所需的 scale
-                content_sizes = {}
-                max_h = 0
-                for m, gif in gifs.items():
-                    l, t, r, b = compute_content_bbox(gif)
-                    content_sizes[m] = (r - l, b - t)
-                    max_h = max(max_h, b - t)
+            # 测量每个动画的内容尺寸，计算缩放到统一目标高度所需的 scale
+            content_sizes = {}
+            max_h = 0
+            for m, gif in gifs.items():
+                l, t, r, b = compute_content_bbox(gif)
+                content_sizes[m] = (r - l, b - t)
+                max_h = max(max_h, b - t)
 
-                pad = max(1, round(max_h * 0.1))
-                frame_w = 0
-                scales = {}
-                for m, (cw, ch) in content_sizes.items():
-                    s = max_h / ch if ch > 0 else 1.0
-                    scales[m] = s
-                    sw = max(1, round(cw * s))
-                    frame_w = max(frame_w, sw)
-                frame_w += 2 * pad
-                frame_h = max_h + 2 * pad
+            pad = max(1, round(max_h * 0.1))
+            frame_w = 0
+            scales = {}
+            for m, (cw, ch) in content_sizes.items():
+                s = max_h / ch if ch > 0 else 1.0
+                scales[m] = s
+                sw = max(1, round(cw * s))
+                frame_w = max(frame_w, sw)
+            frame_w += 2 * pad
+            frame_h = max_h + 2 * pad
 
-                animations = {}
-                for m in motions:
-                    out_dir = char_dir / m
+            animations = {}
+            for m in motions:
+                out_dir = char_dir / m
+                with _timed_stage('sprite_sheet.%s' % m, char_dir):
                     meta = build_sprite_sheet(gifs[m], out_dir / f'{m}.png', fps=FPS,
                                               frame_size=(frame_w, frame_h), scale=scales[m])
-                    animations[m] = {**meta, 'spriteSheetUrl': str(out_dir / f'{m}.png')}
+                animations[m] = {**meta, 'spriteSheetUrl': str(out_dir / f'{m}.png')}
 
             return {'status': 'ready', 'animations': animations}
