@@ -83,9 +83,14 @@ def _sequential_controller_class(video_render_controller):
     """每个动作收尾 writer，但把唯一的 View 留给批次 finally。"""
     class _SequentialVideoRenderController(video_render_controller):
         def _cleanup_after_run_loop(self) -> None:
+            if getattr(self, '_sequential_cleanup_done', False):
+                return
+            self._sequential_cleanup_done = True
             logger.info('顺序渲染完成：%d 帧', self.frames_rendered)
-            self.progress_bar.close()
-            self.video_writer.cleanup()
+            try:
+                self.progress_bar.close()
+            finally:
+                self.video_writer.cleanup()
     return _SequentialVideoRenderController
 
 
@@ -136,11 +141,11 @@ def render_animation(char_anno_dir, motion_cfg_fn, out_gif, use_mesa=None, retar
 
 def render_animations(char_anno_dir, motions: Sequence[MotionRender], use_mesa=None,
                       retarget_cfg=None) -> Dict[str, Path]:
+    items = _validate_motions(motions)
     if not VENDOR.is_dir():
         raise FileNotFoundError(
             f'AnimatedDrawings 目录不存在，无法在其中执行渲染：{VENDOR}（宿主先跑 scripts/setup/setup-vendor.sh）')
 
-    items = _validate_motions(motions)
     scene_yamls = []
     for _, motion_cfg, output_gif in items:
         cfg = build_scene_cfg(char_anno_dir, motion_cfg, output_gif,
@@ -171,7 +176,11 @@ def render_animations(char_anno_dir, motions: Sequence[MotionRender], use_mesa=N
                 _, action_retarget_cfg, action_motion_cfg = configs[index].scene.animated_characters[0]
                 _switch_motion(drawing, scene, action_motion_cfg, action_retarget_cfg)
             controller = SequentialVideoRenderController(configs[index].controller, scene, view)
-            controller.run()
+            try:
+                controller.run()
+            except Exception:
+                controller._cleanup_after_run_loop()
+                raise
             if not output_gif.exists():
                 raise RuntimeError('render finished but gif missing: %s' % output_gif)
             rendered[name] = output_gif

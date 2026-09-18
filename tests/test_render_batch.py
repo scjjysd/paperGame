@@ -23,6 +23,20 @@ def test_render_animations_rejects_duplicate_motion_names(tmp_path):
               ('run', motion, tmp_path / 'b.gif')])
 
 
+@pytest.mark.parametrize('motions, pattern', [
+    ([], '至少一个动作'),
+    ([('run', Path('run.yaml'), Path('run.gif')),
+      ('run', Path('jump.yaml'), Path('jump.gif'))], '动作名不能重复'),
+])
+def test_render_animations_validates_inputs_before_checking_vendor_assets(tmp_path, monkeypatch,
+                                                                          motions, pattern):
+    """坏输入不得被无关的 vendor 缺失掩盖，否则调用方无法修正动作参数。"""
+    monkeypatch.setattr(render_scene, 'VENDOR', tmp_path / 'missing-vendor')
+
+    with pytest.raises(ValueError, match=pattern):
+        render_scene.render_animations(tmp_path, motions)
+
+
 def _install_lifecycle_fakes(monkeypatch, events, fail_action=None, omit_output=False):
     """替代缓慢的 OpenGL/vendor 边界，保留批量编排本身的所有真实调用。"""
     configs = []
@@ -79,12 +93,18 @@ def _install_lifecycle_fakes(monkeypatch, events, fail_action=None, omit_output=
             events.append('view.cleanup')
 
     class FakeWriter:
+        def __init__(self, name):
+            self.name = name
+
         def cleanup(self):
-            events.append('writer.cleanup')
+            events.append(('writer.cleanup', self.name))
 
     class FakeProgress:
+        def __init__(self, name):
+            self.name = name
+
         def close(self):
-            events.append('progress.close')
+            events.append(('progress.close', self.name))
 
     class FakeController:
         def __init__(self, cfg, scene, view):
@@ -92,8 +112,8 @@ def _install_lifecycle_fakes(monkeypatch, events, fail_action=None, omit_output=
             self.scene = scene
             self.view = view
             self.frames_rendered = 1
-            self.progress_bar = FakeProgress()
-            self.video_writer = FakeWriter()
+            self.progress_bar = FakeProgress(cfg.name)
+            self.video_writer = FakeWriter(cfg.name)
 
         def run(self):
             events.append(('render.start', self.cfg.name))
@@ -137,6 +157,10 @@ def test_render_animations_reuses_drawing_and_resets_before_next_motion(tmp_path
     jump_retarget_index = events.index(('drawing.retarget', 'jump'))
     assert reset_index < update_index < jump_retarget_index
     assert ('scene.time', 0.0) in events[jump_retarget_index:]
+    assert events.count(('progress.close', 'run')) == 1
+    assert events.count(('writer.cleanup', 'run')) == 1
+    assert events.count(('progress.close', 'jump')) == 1
+    assert events.count(('writer.cleanup', 'jump')) == 1
     assert events.count('view.cleanup') == 1
     assert configs[0].scene.animated_characters == []
     assert configs[0].scene is not configs[1].scene
@@ -144,13 +168,15 @@ def test_render_animations_reuses_drawing_and_resets_before_next_motion(tmp_path
 
 @pytest.mark.parametrize('fail_action', ['run', 'jump'])
 def test_render_animations_cleans_view_once_when_an_action_fails(tmp_path, monkeypatch, fail_action):
-    """任一动作写入失败都必须释放唯一 OpenGL View，且不能重复释放。"""
+    """任一动作抛错时必须收尾该动作资源，并只释放一次唯一 OpenGL View。"""
     events = []
     _install_lifecycle_fakes(monkeypatch, events, fail_action=fail_action)
 
     with pytest.raises(RuntimeError, match='render failed'):
         render_scene.render_animations(tmp_path, _motions(tmp_path))
 
+    assert events.count(('progress.close', fail_action)) == 1
+    assert events.count(('writer.cleanup', fail_action)) == 1
     assert events.count('view.cleanup') == 1
 
 
