@@ -50,9 +50,9 @@ def test_entrypoint_rejects_invalid_worker_count(tmp_path, workers):
     assert config == ''
 
 
-def test_compose_wires_optional_worker_count_and_readonly_entrypoint():
+def test_compose_invokes_readonly_entrypoint_through_shell():
     compose = yaml.safe_load((ROOT / 'docker-compose.yml').read_text())
     service = compose['services']['torchserve']
-    assert service['entrypoint'] == ['/torchserve-entrypoint.sh']
+    assert service['entrypoint'] == ['/bin/sh', '/torchserve-entrypoint.sh']
     assert service['environment']['TORCHSERVE_WORKERS_PER_MODEL'] == '${TORCHSERVE_WORKERS_PER_MODEL:-}'
     assert './docker/torchserve-entrypoint.sh:/torchserve-entrypoint.sh:ro' in service['volumes']

@@ -39,7 +39,8 @@ services:
     # 注：不采用 devices+count:0 方案——实测无 GPU 宿主机上 count=0 的设备请求
     #     仍会报 "failed to discover GPU vendor from CDI"，故用 runtime 切换实现单文件开关。
     runtime: ${GPU_RUNTIME:-runc}
-    entrypoint: ["/torchserve-entrypoint.sh"]
+    # NAS 挂载可能丢失脚本的可执行位；由镜像内 shell 解释，只需脚本可读。
+    entrypoint: ["/bin/sh", "/torchserve-entrypoint.sh"]
     environment:
       # 仅 nvidia runtime 下生效；默认全部 GPU，可填具体序号/UUID 限定
       NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
