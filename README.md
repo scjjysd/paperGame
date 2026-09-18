@@ -202,7 +202,7 @@ jjhks/
 | `ad-torchserve` | `paper-game/ad-torchserve:local` | 8080 推理 / 8081 管理 | 涂鸦检测、分割、骨架估计 | 内存上限 16GB；python urllib 探活，`start_period: 60s`（模型加载慢） |
 | `pg-redis` | `redis:7-alpine` | — | 队列 + 任务状态 | `redis-cli ping` 健康检查 |
 | `pg-api` | `paper-game/server:local` | 8000 | 上传、轮询、静态伺服产物、审查页 | `uvicorn app.main:app`；卷 `./out → /data/out`；`PUBLIC_BASE_URL` / `CORS_*` / `LOG_*` |
-| `pg-worker` | 同 api 镜像 | — | 消费队列、子进程渲染 | `RENDER_USE_MESA=true`；`stop_grace_period: 300s`（≥120s×2 次尝试，防 docker 默认 10s SIGKILL 打断渲染） |
+| `pg-worker` | 同 api 镜像 | — | 消费队列、子进程渲染 | `RENDER_USE_MESA=true`；`RENDER_MAX_DIM=800`（渲染前最长边，降低 ARAP 网格规模）；`stop_grace_period: 300s`（≥120s×2 次尝试，防 docker 默认 10s SIGKILL 打断渲染） |
 
 api 与 worker **分开部署**：故障域隔离、可独立 restart、可 `--scale worker=N` 伸缩；共享镜像使边际成本仅一份基础运行时内存。
 

@@ -5,7 +5,7 @@ from pathlib import Path
 import time
 from typing import Dict, Sequence
 
-from app.services.annotation_repair import repair_or_reject
+from app.services.annotation_repair import downscale_annotation_for_render, repair_or_reject
 from app.services.annotations import analyze
 from app.services.motion_2d import FPS, synth_motion
 from app.services.render_scene import render_animation, render_animations
@@ -39,6 +39,8 @@ class CharacterPipeline:
 
         analyze(input_path, out_dir / 'anno')
         repair_or_reject(out_dir / 'anno')   # 补回被 vendor 丢弃的部件；修不好则 needs_correction
+        if (out_dir / 'anno' / 'char_cfg.yaml').exists():
+            downscale_annotation_for_render(out_dir / 'anno')
         # 合成动作必须在 repair 之后：用的是修好并吸附过的关节，否则首帧姿态对不上原画
         motion_cfg = synth_motion(out_dir / 'anno' / 'char_cfg.yaml', motion, out_dir)
         gif = render_animation(out_dir / 'anno', motion_cfg, out_dir / f'{motion}.gif')
@@ -58,6 +60,9 @@ class CharacterPipeline:
                 analyze(input_path, char_dir / 'anno')
             with _timed_stage('repair', char_dir):
                 repair_or_reject(char_dir / 'anno')
+            with _timed_stage('downscale_for_render', char_dir):
+                if (char_dir / 'anno' / 'char_cfg.yaml').exists():
+                    downscale_annotation_for_render(char_dir / 'anno')
             char_cfg = char_dir / 'anno' / 'char_cfg.yaml'
 
             motion_renders = []

@@ -17,6 +17,7 @@ vendor 的标注产物有四类缺陷，本模块逐一对治（编号沿用 doc
 契约已有的 needs_correction 通道（返回 mask + 吸附后的关节给骨架确认页）。
 """
 import math
+import os
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -45,6 +46,7 @@ MIN_PART_RATIO = 0.002    # 小于此面积占比的丢失部件视为碎点噪�
 SKIP_RATIO = 0.004        # 丢失总量低于此占比视为干净样本，mask 原样不动
 MESH_GRID = 40            # vendor _generate_mesh 的 linspace(0, img_dim, 40) 内部顶点数
 BORDER_MARGIN = 2         # vendor 要求 mask 不触边，否则 contour 查找失败
+RENDER_MAX_DIM = 800      # ARAP 前的最长边；保留原始标注尺寸，渲染副本可降采样
 
 
 def _bridge_width(mask_shape) -> int:
@@ -246,6 +248,47 @@ def _vendor_resized(image: np.ndarray) -> np.ndarray:
     return cv2.resize(image, (round(scale * image.shape[1]), round(scale * image.shape[0])))
 
 
+def downscale_annotation_for_render(anno_dir, max_dim: Optional[int] = None) -> bool:
+    """按比例缩小已修复标注，降低 vendor ARAP 的网格与矩阵规模。
+
+    该步骤只应在 repair 完成后调用：此时 bounding_box/image 已不再参与坐标推导，
+    texture、mask 和 skeleton 可以安全地按同一比例变换。返回是否实际缩放。
+    """
+    anno_dir = Path(anno_dir)
+    cfg_path = anno_dir / 'char_cfg.yaml'
+    cfg = yaml.safe_load(cfg_path.read_text())
+    height, width = int(cfg['height']), int(cfg['width'])
+    if max_dim is None:
+        max_dim = os.environ.get('RENDER_MAX_DIM', str(RENDER_MAX_DIM))
+    limit = int(max_dim)
+    if limit <= 0:
+        raise ValueError('max_dim must be positive')
+    longest = max(height, width)
+    if longest <= limit:
+        return False
+
+    scale = limit / float(longest)
+    new_width = max(1, round(width * scale))
+    new_height = max(1, round(height * scale))
+    texture_path = anno_dir / 'texture.png'
+    mask_path = anno_dir / 'mask.png'
+    texture = cv2.imread(str(texture_path), cv2.IMREAD_UNCHANGED)
+    mask = np.array(Image.open(mask_path))
+    if texture is None or texture.shape[:2] != (height, width) or mask.shape[:2] != (height, width):
+        raise NeedsCorrection('NO_CONTOUR', f'invalid annotation dimensions: {anno_dir}')
+
+    texture = cv2.resize(texture, (new_width, new_height), interpolation=cv2.INTER_AREA)
+    mask = cv2.resize(mask, (new_width, new_height), interpolation=cv2.INTER_NEAREST)
+    cv2.imwrite(str(texture_path), texture)
+    Image.fromarray(np.ascontiguousarray(mask)).save(mask_path)
+    for joint in cfg['skeleton']:
+        joint['loc'] = [round(float(joint['loc'][0]) * scale),
+                        round(float(joint['loc'][1]) * scale)]
+    cfg.update({'height': new_height, 'width': new_width})
+    cfg_path.write_text(yaml.safe_dump(cfg))
+    return True
+
+
 def loss_in_image_frame(image: np.ndarray, box: Dict, mask: np.ndarray) -> float:
     """把 mask 映射回原图坐标系后，全图笔画有多少没被覆盖。
 
@@ -407,38 +450,63 @@ def repair_or_reject(anno_dir) -> Dict:
     # 每一步修复都不得让网格连通性比它更差，否则宁可少修 —— 网格断开会让
     # vendor arap.py 卡在 `while np.linalg.det(...) == 0.0` 扰动循环（实测 s07 >300s、983% CPU）。
     baseline = _disk_candidate(anno_dir, skeleton, repair=False)
-    floor = mesh_unreachable(baseline['mask'])
 
     # 候选按偏好排序：墨迹框 > 按比例扩框 > 原框 > 基线
     options = []
     if image is not None and plain_box is not None:
-        height, width = image.shape[:2]
-        plain = _candidate(image, plain_box, skeleton)
-        wider = [('ink', _ink_box(image, plain_box)),
-                 ('pad', dict(zip(('top', 'bottom', 'left', 'right'),
-                                  _pad_box(plain_box, height, width))))]
-        seen = [plain_box]
-        for tag, box in wider:
-            if box in seen:
-                continue
-            seen.append(box)
-            cand = _candidate(image, box, skeleton, ref_box=plain_box)
-            # 扩框只在能救回更多笔画时才入候选：彩色/纹理背景（garlic）扩框后
-            # segment() 会抓错区域、丢失率反而上升。不比关节偏移：它由 F1 吸附归零、
-            # 并由门禁兼顶；加进护栏会误杀真正需要扩框的样本（s09：29.5%→6.2%）。
-            if cand['loss'] < plain['loss']:
-                options.append((cand, tag))
-        options.append((plain, 'plain'))
+        # 干净且已连通的 vendor 标注不需要重跑 segment、扩框候选和 mesh 检查。
+        # SKIP_RATIO 与 rebuild_mask 的门槛一致，避免改变既有修复判定。
+        missing = _ink(baseline['texture']) & ~(baseline['mask'] > 0)
+        connected = ndimage.label(baseline['mask'] > 0)[1] <= 1
+        if missing.sum() < SKIP_RATIO * baseline['mask'].size and connected:
+            options.append((baseline, 'plain'))
+        else:
+            height, width = image.shape[:2]
+            # plain_box 就是 vendor 已经产出的检测框；复用其 texture/mask，避免
+            # 为普通候选再次调用 vendor segment()，只对真正扩框的候选重新分割。
+            if baseline['texture'].shape[:2] == (
+                    plain_box['bottom'] - plain_box['top'],
+                    plain_box['right'] - plain_box['left']):
+                plain_mask = rebuild_mask(baseline['texture'], baseline['mask'])
+                plain_offset, plain_joint = worst_joint_offset(plain_mask, skeleton)
+                plain = {'texture': baseline['texture'], 'mask': plain_mask,
+                         'skeleton': list(skeleton), 'box': plain_box,
+                         'loss': loss_in_image_frame(image, plain_box, plain_mask),
+                         'offset': plain_offset, 'joint': plain_joint}
+            else:
+                # repair_or_reject 可能被重复调用，此时磁盘产物已使用扩框尺寸，
+                # bounding_box.yaml 仍是旧框，不能把两套坐标强行当作同一候选。
+                plain = _candidate(image, plain_box, skeleton)
+            wider = [('ink', _ink_box(image, plain_box)),
+                     ('pad', dict(zip(('top', 'bottom', 'left', 'right'),
+                                      _pad_box(plain_box, height, width))))]
+            seen = [plain_box]
+            for tag, box in wider:
+                if box in seen:
+                    continue
+                seen.append(box)
+                cand = _candidate(image, box, skeleton, ref_box=plain_box)
+                # 扩框只在能救回更多笔画时才入候选：彩色/纹理背景（garlic）扩框后
+                # segment() 会抓错区域、丢失率反而上升。不比关节偏移：它由 F1 吸附归零、
+                # 并由门禁兼顶；加进护栏会误杀真正需要扩框的样本（s09：29.5%→6.2%）。
+                if cand['loss'] < plain['loss']:
+                    options.append((cand, tag))
+            options.append((plain, 'plain'))
     else:
         # 缺 image.png / bounding_box.yaml（旧产物或人工构造）时退回只修 mask
-        options.append((_disk_candidate(anno_dir, skeleton, repair=True), 'plain'))
+        repaired = _disk_candidate(anno_dir, skeleton, repair=True)
+        options.append((repaired, 'plain'))
 
     # 在候选里挑全图丢失率最低的，而不是按固定优先级取第一个：实测少数样本
     # （s06 1.7% vs 墨迹框 2.4%、s17 2.4% vs 2.6%）按比例扩框反而更干净。
     # next 仍是惰性的，所以通常只对排在最前的那个候选算一次 mesh_unreachable。
     options.sort(key=lambda o: o[0]['loss'])
-    chosen, crop = next(((c, t) for c, t in options if _mesh_ok(c, floor)),
-                        (baseline, 'baseline'))
+    if len(options) == 1 and options[0][0] is baseline:
+        chosen, crop = options[0]
+    else:
+        floor = mesh_unreachable(baseline['mask'])
+        chosen, crop = next(((c, t) for c, t in options if _mesh_ok(c, floor)),
+                            (baseline, 'baseline'))
 
     if not (chosen['mask'] > 0).any():
         raise NeedsCorrection('NO_CONTOUR', 'mask empty after repair')

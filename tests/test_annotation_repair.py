@@ -11,7 +11,8 @@ from app.services import annotation_repair
 from app.services.annotation_repair import (MAX_JOINT_OFFSET, MESH_GRID, PAD_RATIO,
                                             _candidate, extend_limb_tips,
                                             _bridge_width, _pad_box, _vendor_resized,
-                                            mesh_unreachable, project_joints_to_axis,
+                                            downscale_annotation_for_render, mesh_unreachable,
+                                            project_joints_to_axis,
                                             rebuild_mask, repair_or_reject, stroke_loss,
                                             worst_joint_offset)
 from app.services.annotations import NeedsCorrection
@@ -244,6 +245,39 @@ def test_vendor_resize_is_replicated_before_using_bounding_box():
 
     small = np.full((512, 512, 3), 255, np.uint8)          # ≤1000 不缩放，原样返回
     assert _vendor_resized(small) is small
+
+
+def test_downscale_annotation_updates_pixels_dimensions_and_skeleton(tmp_path):
+    mask = np.zeros((1000, 1000), np.uint8)
+    mask[150:280, 120:180] = 255
+    anno = _write_anno(tmp_path, _drawing(size=1000), mask,
+                       _skeleton(neck_loc=(500, 600), root_loc=(500, 900)))
+
+    assert downscale_annotation_for_render(anno, max_dim=800) is True
+
+    cfg = yaml.safe_load((anno / 'char_cfg.yaml').read_text())
+    texture = cv2.imread(str(anno / 'texture.png'), cv2.IMREAD_UNCHANGED)
+    mask = np.array(Image.open(anno / 'mask.png'))
+    assert (cfg['height'], cfg['width']) == (800, 800)
+    assert texture.shape[:2] == mask.shape == (800, 800)
+    skeleton = {j['name']: j['loc'] for j in cfg['skeleton']}
+    assert skeleton['neck'] == [400, 480]
+    assert skeleton['root'] == [400, 720]
+    assert set(np.unique(mask)) <= {0, 255}
+    assert downscale_annotation_for_render(anno, max_dim=800) is False
+
+
+def test_clean_annotation_skips_mesh_candidate_checks(tmp_path, monkeypatch):
+    clean = np.full((SIZE, SIZE, 3), 255, np.uint8)
+    anno = _write_anno(tmp_path, clean, _body_only_mask(),
+                       _skeleton(neck_loc=(150, 60)))
+    cv2.imwrite(str(anno / 'image.png'), clean)
+    (anno / 'bounding_box.yaml').write_text(yaml.safe_dump(
+        {'top': 0, 'bottom': SIZE, 'left': 0, 'right': SIZE}))
+    monkeypatch.setattr(annotation_repair, 'mesh_unreachable',
+                        lambda *_: pytest.fail('clean annotation should skip mesh checks'))
+    info = repair_or_reject(anno)
+    assert info['crop'] == 'plain'
 
 
 def test_padding_recovers_ink_clipped_by_detector_box(tmp_path):
