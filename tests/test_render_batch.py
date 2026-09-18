@@ -1,10 +1,31 @@
+import logging
 from pathlib import Path
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 import yaml
 
 from app.services import render_scene
+
+
+def test_mesh_metrics_calculates_unique_edges_and_dense_bytes():
+    """重复三角边若未去重，会把 ARAP 的峰值内存估算放大。"""
+    vertices = np.zeros((4, 2), dtype=np.float32)
+    triangles = [np.array([0, 1, 2]), np.array([1, 2, 3])]
+
+    metrics = render_scene._mesh_metrics(vertices, triangles, pin_count=2)
+
+    assert metrics['vertices'] == 4
+    assert metrics['triangles'] == 2
+    assert metrics['edges'] == 5
+    assert metrics['a1_rows'] == 14
+    assert metrics['a1_cols'] == 8
+    assert metrics['a1_bytes'] == 14 * 8 * 4
+    assert metrics['g_bytes'] == 10 * 8 * 4
+    assert metrics['a2_bytes'] == 7 * 4 * 4
+    assert metrics['normal1_bytes'] == 8 * 8 * 4
+    assert metrics['normal2_bytes'] == 4 * 4 * 4
 
 
 def test_render_animations_rejects_empty_motion_list(tmp_path):
@@ -57,6 +78,9 @@ def _install_lifecycle_fakes(monkeypatch, events, fail_action=None, omit_output=
         def __init__(self, character, retarget_cfg, motion_cfg):
             self.retarget_cfg = retarget_cfg
             self.motion_cfg = motion_cfg
+            self.arap = SimpleNamespace(pin_num=1,
+                                        A1=np.zeros((2, 2), dtype=np.float32),
+                                        A2=np.zeros((1, 1), dtype=np.float32))
             events.append(('drawing.create', motion_cfg.name))
 
         def set_time(self, value):
@@ -139,8 +163,9 @@ def _motions(tmp_path):
     return motions
 
 
-def test_render_animations_reuses_drawing_and_resets_before_next_motion(tmp_path, monkeypatch):
+def test_render_animations_reuses_drawing_and_resets_before_next_motion(tmp_path, monkeypatch, caplog):
     """遗漏旧动作归零会让 jump 从 run 末帧姿态计算新的 retargeter。"""
+    caplog.set_level(logging.INFO, logger=render_scene.__name__)
     events = []
     configs = _install_lifecycle_fakes(monkeypatch, events)
 
@@ -164,6 +189,10 @@ def test_render_animations_reuses_drawing_and_resets_before_next_motion(tmp_path
     assert events.count('view.cleanup') == 1
     assert configs[0].scene.animated_characters == []
     assert configs[0].scene is not configs[1].scene
+    assert '动作 run retarget' in caplog.text
+    assert '动作 run 渲染' in caplog.text
+    assert '动作 jump retarget' in caplog.text
+    assert '动作 jump 渲染' in caplog.text
 
 
 @pytest.mark.parametrize('fail_action', ['run', 'jump'])

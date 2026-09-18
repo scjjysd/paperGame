@@ -1,6 +1,7 @@
 """生成 AnimatedDrawings 渲染场景 YAML 并执行渲染，输出透明 GIF。"""
 import logging
 import os
+import time
 from pathlib import Path
 from typing import Dict, List, Sequence, Tuple
 
@@ -50,6 +51,33 @@ def _validate_motions(motions: Sequence[MotionRender]) -> List[MotionRender]:
     return items
 
 
+def _mesh_metrics(vertices, triangles, pin_count: int) -> Dict[str, int]:
+    """根据已经生成的网格估算 ARAP 稠密矩阵的内存规模。"""
+    edges = set()
+    for v0, v1, v2 in triangles:
+        edges.update((
+            tuple(sorted((int(v0), int(v1)))),
+            tuple(sorted((int(v1), int(v2)))),
+            tuple(sorted((int(v2), int(v0)))),
+        ))
+    vertex_count, edge_count = len(vertices), len(edges)
+    a1_rows, a1_cols = 2 * (edge_count + pin_count), 2 * vertex_count
+    a2_rows, a2_cols = edge_count + pin_count, vertex_count
+    return {
+        'vertices': vertex_count,
+        'triangles': len(triangles),
+        'edges': edge_count,
+        'pins': pin_count,
+        'a1_rows': a1_rows,
+        'a1_cols': a1_cols,
+        'a1_bytes': a1_rows * a1_cols * 4,
+        'g_bytes': (2 * edge_count) * a1_cols * 4,
+        'a2_bytes': a2_rows * a2_cols * 4,
+        'normal1_bytes': a1_cols * a1_cols * 4,
+        'normal2_bytes': a2_cols * a2_cols * 4,
+    }
+
+
 def _load_vendor_components():
     """延迟导入 OpenGL 依赖，使批量编排可在无图形环境中完成契约测试。"""
     from animated_drawings.config import Config
@@ -75,7 +103,25 @@ def _switch_motion(drawing, scene, motion_cfg, retarget_cfg) -> None:
 def _logged_animated_drawing_class(animated_drawing):
     """以运行时子类替代 vendor monkeypatch，保留项目层扩展点。"""
     class _LoggedAnimatedDrawing(animated_drawing):
-        pass
+        def _generate_mesh(self) -> None:
+            super()._generate_mesh()
+            metrics = _mesh_metrics(self.mesh['vertices'], self.mesh['triangles'],
+                                    pin_count=len(self.char_cfg.skeleton))
+            mask_height, mask_width = self.mask.shape[:2]
+            logger.info(
+                'ARAP 构造前：mask=%dx%d，vertices=%d，triangles=%d，edges=%d，pins=%d，'
+                'A1=%dx%d/%d bytes，G=%d bytes，A2=%dx%d/%d bytes，'
+                'normal1=%d bytes，normal2=%d bytes',
+                mask_width, mask_height, metrics['vertices'], metrics['triangles'],
+                metrics['edges'], metrics['pins'], metrics['a1_rows'], metrics['a1_cols'],
+                metrics['a1_bytes'], metrics['g_bytes'], metrics['a2_rows'], metrics['a2_cols'],
+                metrics['a2_bytes'], metrics['normal1_bytes'], metrics['normal2_bytes'])
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            logger.info('ARAP 构造后：effective_pins=%d，A1=%s/%d bytes，A2=%s/%d bytes',
+                        self.arap.pin_num, self.arap.A1.shape, self.arap.A1.nbytes,
+                        self.arap.A2.shape, self.arap.A2.nbytes)
     return _LoggedAnimatedDrawing
 
 
@@ -166,7 +212,14 @@ def render_animations(char_anno_dir, motions: Sequence[MotionRender], use_mesa=N
         view = View.create_view(configs[0].view)
 
         LoggedAnimatedDrawing = _logged_animated_drawing_class(AnimatedDrawing)
+        static_init_started = time.perf_counter()
         drawing = LoggedAnimatedDrawing(*first_character)
+        static_init_elapsed = time.perf_counter() - static_init_started
+        first_name = items[0][0]
+        logger.info('静态角色初始化（含网格、ARAP 与动作 %s retarget）完成，耗时 %.3f 秒',
+                    first_name, static_init_elapsed)
+        logger.info('动作 %s retarget 完成（包含静态角色初始化），耗时 %.3f 秒',
+                    first_name, static_init_elapsed)
         scene.add_child(drawing)
         SequentialVideoRenderController = _sequential_controller_class(VideoRenderController)
 
@@ -174,13 +227,19 @@ def render_animations(char_anno_dir, motions: Sequence[MotionRender], use_mesa=N
         for index, (name, _, output_gif) in enumerate(items):
             if index:
                 _, action_retarget_cfg, action_motion_cfg = configs[index].scene.animated_characters[0]
+                retarget_started = time.perf_counter()
                 _switch_motion(drawing, scene, action_motion_cfg, action_retarget_cfg)
+                logger.info('动作 %s retarget 完成，耗时 %.3f 秒', name,
+                            time.perf_counter() - retarget_started)
             controller = SequentialVideoRenderController(configs[index].controller, scene, view)
+            render_started = time.perf_counter()
             try:
                 controller.run()
             except Exception:
                 controller._cleanup_after_run_loop()
                 raise
+            logger.info('动作 %s 渲染完成，耗时 %.3f 秒', name,
+                        time.perf_counter() - render_started)
             if not output_gif.exists():
                 raise RuntimeError('render finished but gif missing: %s' % output_gif)
             rendered[name] = output_gif
