@@ -120,7 +120,8 @@ def test_render_animations_validates_inputs_before_checking_vendor_assets(tmp_pa
         render_scene.render_animations(tmp_path, motions)
 
 
-def _install_lifecycle_fakes(monkeypatch, events, fail_action=None, omit_output=False):
+def _install_lifecycle_fakes(monkeypatch, events, fail_action=None, omit_output=False,
+                             render_error=None, writer_cleanup_error=None):
     """替代缓慢的 OpenGL/vendor 边界，保留批量编排本身的所有真实调用。"""
     configs = []
 
@@ -184,6 +185,8 @@ def _install_lifecycle_fakes(monkeypatch, events, fail_action=None, omit_output=
 
         def cleanup(self):
             events.append(('writer.cleanup', self.name))
+            if writer_cleanup_error is not None:
+                raise writer_cleanup_error('writer cleanup failed')
 
     class FakeProgress:
         def __init__(self, name):
@@ -204,6 +207,8 @@ def _install_lifecycle_fakes(monkeypatch, events, fail_action=None, omit_output=
         def run(self):
             events.append(('render.start', self.cfg.name))
             if self.cfg.name == fail_action:
+                if render_error is not None:
+                    raise render_error('original render failure')
                 raise RuntimeError('render failed: %s' % fail_action)
             if not omit_output:
                 Path(self.cfg.output_video_path).write_text(self.cfg.name)
@@ -374,6 +379,31 @@ def test_render_animations_cleans_view_once_when_an_action_fails(tmp_path, monke
     assert events.count(('writer.cleanup', fail_action)) == 1
     assert events.count('view.cleanup') == 1
     assert 'stage=render_%s' % fail_action in caplog.text
+
+
+def test_render_animations_preserves_render_error_when_action_cleanup_fails(tmp_path, monkeypatch,
+                                                                             caplog):
+    """空帧 GIF 收尾失败不能覆盖 OpenGL 首帧前的真实渲染异常。"""
+    class OriginalRenderError(RuntimeError):
+        pass
+
+    class CleanupError(RuntimeError):
+        pass
+
+    events = []
+    caplog.set_level(logging.ERROR, logger=render_scene.__name__)
+    _install_lifecycle_fakes(monkeypatch, events, fail_action='run',
+                             render_error=OriginalRenderError,
+                             writer_cleanup_error=CleanupError)
+
+    with pytest.raises(OriginalRenderError, match='original render failure'):
+        render_scene.render_animations(tmp_path, _motions(tmp_path))
+
+    assert events.count(('progress.close', 'run')) == 1
+    assert events.count(('writer.cleanup', 'run')) == 1
+    assert events.count('view.cleanup') == 1
+    assert 'action=run' in caplog.text
+    assert 'writer cleanup failed' in caplog.text
 
 
 def test_render_animations_fails_when_controller_does_not_create_gif(tmp_path, monkeypatch):

@@ -262,7 +262,10 @@ def render_animations(char_anno_dir, motions: Sequence[MotionRender], use_mesa=N
                 try:
                     controller.run()
                 except Exception:
-                    controller._cleanup_after_run_loop()
+                    try:
+                        controller._cleanup_after_run_loop()
+                    except Exception:
+                        logger.exception('动作渲染异常后的资源清理失败：action=%s', name)
                     raise
             logger.info('动作 %s 渲染完成，耗时 %.3f 秒', name,
                         time.perf_counter() - render_started)
