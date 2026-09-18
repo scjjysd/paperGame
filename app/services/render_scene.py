@@ -209,6 +209,7 @@ def render_animations(char_anno_dir, motions: Sequence[MotionRender], use_mesa=N
 
     scene_yamls = []
     for _, motion_cfg, output_gif in items:
+        output_gif.parent.mkdir(parents=True, exist_ok=True)
         cfg = build_scene_cfg(char_anno_dir, motion_cfg, output_gif,
                               use_mesa=use_mesa, retarget_cfg=retarget_cfg)
         scene_yaml = output_gif.with_suffix('.scene.yaml')
