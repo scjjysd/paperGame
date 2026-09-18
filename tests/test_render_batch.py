@@ -1,5 +1,10 @@
+import importlib.util
+import json
 import logging
+import os
 from pathlib import Path
+import subprocess
+import sys
 from types import SimpleNamespace
 
 import numpy as np
@@ -276,6 +281,50 @@ def test_render_animations_creates_mesa_view_before_loading_video_controller(tmp
     render_scene.render_animations(tmp_path, [_motions(tmp_path)[0]], use_mesa=True)
 
     assert events == ['view.create', 'drawing.import', 'controller.import', 'view.cleanup']
+
+
+def test_vendor_loaders_keep_opengl_modules_out_of_early_import_subprocess(tmp_path):
+    """真实 early loader 不能提前加载会锁定 PyOpenGL 平台的 vendor 模块。"""
+    shim_dir = tmp_path / 'shim'
+    shim_dir.mkdir()
+    if importlib.util.find_spec('pkg_resources') is None:
+        (shim_dir / 'pkg_resources.py').write_text(
+            'def resource_filename(_package, resource):\n    return resource\n')
+
+    repo_root = Path(__file__).resolve().parents[1]
+    env = os.environ.copy()
+    python_path = [str(shim_dir), str(repo_root / 'vendor' / 'AnimatedDrawings')]
+    if env.get('PYTHONPATH'):
+        python_path.append(env['PYTHONPATH'])
+    env['PYTHONPATH'] = os.pathsep.join(python_path)
+    script = """
+import json
+import sys
+from app.services import render_scene
+
+tracked = (
+    'animated_drawings.model.animated_drawing',
+    'animated_drawings.controller.video_render_controller',
+    'OpenGL.GL',
+)
+before = [name for name in tracked if name in sys.modules]
+render_scene._load_vendor_components()
+early = [name for name in tracked if name in sys.modules]
+render_scene._load_render_components()
+late = [name for name in tracked if name in sys.modules]
+print(json.dumps({'before': before, 'early': early, 'late': late}))
+"""
+    result = subprocess.run([sys.executable, '-c', script], env=env, text=True,
+                            capture_output=True, check=True)
+    observed = json.loads(result.stdout)
+
+    assert observed['before'] == []
+    assert observed['early'] == []
+    assert observed['late'] == [
+        'animated_drawings.model.animated_drawing',
+        'animated_drawings.controller.video_render_controller',
+        'OpenGL.GL',
+    ]
 
 
 def test_render_animations_reuses_drawing_and_resets_before_next_motion(tmp_path, monkeypatch, caplog):
