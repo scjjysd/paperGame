@@ -26,6 +26,7 @@ testdata/output/
 /CLAUDE.md
 /.codex/
 /.ai/
+/.worktrees/
 
 # 飞牛 NAS 本地部署工具
 /fnos/
