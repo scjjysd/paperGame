@@ -28,10 +28,20 @@ def test_mesh_metrics_calculates_unique_edges_and_dense_bytes():
     assert metrics['normal2_bytes'] == 4 * 4 * 4
 
 
-def test_logged_animated_drawing_logs_mesh_before_arap_and_actual_matrices_after(caplog):
+def test_logged_animated_drawing_logs_mesh_before_arap_and_actual_matrices_after(caplog, monkeypatch):
     """移动网格 hook 到 ARAP 后会失去 OOM 前的关键诊断日志。"""
     caplog.set_level(logging.INFO, logger=render_scene.__name__)
     events = []
+    original_info = render_scene.logger.info
+
+    def record_info(message, *args, **kwargs):
+        if message.startswith('ARAP 构造前'):
+            events.append('estimated.log')
+        elif message.startswith('ARAP 构造后'):
+            events.append('actual.log')
+        original_info(message, *args, **kwargs)
+
+    monkeypatch.setattr(render_scene.logger, 'info', record_info)
 
     class FakeBase:
         def __init__(self):
@@ -66,8 +76,8 @@ def test_logged_animated_drawing_logs_mesh_before_arap_and_actual_matrices_after
     assert 'edges=5' in messages[estimated_index]
     assert 'pins=2' in messages[estimated_index]
     assert 'A1=14x8/' in messages[estimated_index]
-    assert events.index('mesh.generated') < events.index('arap.construct')
-    assert estimated_index < actual_index
+    assert (events.index('mesh.generated') < events.index('estimated.log') <
+            events.index('arap.construct') < events.index('actual.log'))
     assert 'effective_pins=1' in messages[actual_index]
     assert 'A1.shape=(2, 4)' in messages[actual_index]
     assert 'A1.nbytes=32' in messages[actual_index]
