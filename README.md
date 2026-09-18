@@ -508,7 +508,35 @@ curl http://localhost:8000/v1/characters/char_9c3ff81ce4ea
 open http://localhost:8000/artifacts/char_9c3ff81ce4ea/run.png
 ```
 
-### 8.5 宿主侧开发环境（不走容器，直调管线）
+### 8.5 角色渲染内存调优与实测
+
+TorchServe 的两个模型分别读取同一个 worker 数；只接受正整数。修改 `.env` 后重新创建
+TorchServe 容器即可生效，无需重建 TorchServe 镜像：
+
+```dotenv
+# 每个模型分别启动 N 个 worker；两个模型在 N=2 时总计 4 个。
+# 留空不覆盖 TorchServe 原生默认。
+TORCHSERVE_WORKERS_PER_MODEL=2
+```
+
+低内存环境设为 `1`；有有限并发余量时设为 `2`。留空恢复 TorchServe 原生默认，不能填
+`0`、负数、小数或非数字。应用变更使用：
+
+```bash
+docker compose up -d --force-recreate torchserve
+```
+
+角色 worker 仍串行执行 `run`、`jump`，但两动作共享一次静态角色、网格、ARAP 和 OpenGL
+初始化。`force=true` 保留给测试和人工明确重跑，普通客户端请求不应默认携带它。
+
+2026-09-18 在 Docker Desktop 16 GiB 限额、`TORCHSERVE_WORKERS_PER_MODEL=2` 下，通过正式
+API 对 `testdata/myson/man1.jpg` 执行一次 `force=true` 重跑：检测和姿态模型各为 2 worker；
+TorchServe idle 为 2.898 GiB，任务期间采样峰值为 3.377 GiB；角色 worker 峰值为 4.985 GiB。
+任务在 54 秒达到 `ready`（run 10 帧、jump 7 帧，统一 292x396），本次任务时间窗口没有 Docker
+OOM 事件，worker 的 `OOMKilled=false`。阶段日志记录了分析、修复、静态初始化、两动作渲染和
+精灵表耗时，可从 `out/logs/render-runner-YYYY-MM-DD.log` 查询。
+
+### 8.6 宿主侧开发环境（不走容器，直调管线）
 
 ```bash
 bash scripts/setup/setup-vendor.sh

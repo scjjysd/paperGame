@@ -205,8 +205,12 @@ def _install_lifecycle_fakes(monkeypatch, events, fail_action=None, omit_output=
             events.append(('render.end', self.cfg.name))
             self._cleanup_after_run_loop()
 
-    monkeypatch.setattr(render_scene, '_load_vendor_components',
-                        lambda: (FakeConfig, FakeController, FakeDrawing, FakeScene, FakeView))
+    def load_components():
+        return FakeConfig, FakeView
+
+    monkeypatch.setattr(render_scene, '_load_vendor_components', load_components)
+    monkeypatch.setattr(render_scene, '_load_render_components',
+                        lambda: (FakeDrawing, FakeScene, FakeController))
     return configs
 
 
@@ -218,6 +222,60 @@ def _motions(tmp_path):
         (tmp_path / (name + '.bvh')).write_text('motion')
         motions.append((name, motion, tmp_path / (name + '.gif')))
     return motions
+
+
+def test_render_animations_creates_mesa_view_before_loading_video_controller(tmp_path, monkeypatch):
+    """MesaView 必须先设置 PyOpenGL 平台，controller 顶层导入 GL 才不会锁到 GLX。"""
+    events = []
+
+    class FakeConfig:
+        def __init__(self, scene_yaml):
+            raw = yaml.safe_load(Path(scene_yaml).read_text())
+            character = raw['scene']['ANIMATED_CHARACTERS'][0]
+            item = (SimpleNamespace(name='character'),
+                    SimpleNamespace(name='run'), SimpleNamespace(name='run'))
+            self.scene = SimpleNamespace(animated_characters=[item])
+            self.view = SimpleNamespace(name='mesa')
+            self.controller = SimpleNamespace(output_video_path=raw['controller']['OUTPUT_VIDEO_PATH'],
+                                              name='run')
+
+    class FakeView:
+        @staticmethod
+        def create_view(cfg):
+            events.append('view.create')
+            return SimpleNamespace(cleanup=lambda: events.append('view.cleanup'))
+
+    class FakeDrawing:
+        def __init__(self, *args):
+            self.arap = SimpleNamespace(pin_num=1, A1=np.zeros((1, 1)), A2=np.zeros((1, 1)))
+
+    class FakeScene:
+        def __init__(self, cfg):
+            pass
+
+        def add_child(self, child):
+            pass
+
+    class FakeController:
+        def __init__(self, cfg, scene, view):
+            self.cfg = cfg
+            self.frames_rendered = 0
+            self.progress_bar = SimpleNamespace(close=lambda: None)
+            self.video_writer = SimpleNamespace(cleanup=lambda: None)
+
+        def run(self):
+            Path(self.cfg.output_video_path).write_text('rendered')
+
+    monkeypatch.setattr(render_scene, '_load_vendor_components',
+                        lambda: (FakeConfig, FakeView))
+    monkeypatch.setattr(render_scene, '_load_render_components',
+                        lambda: (events.append('drawing.import') or FakeDrawing,
+                                 FakeScene,
+                                 events.append('controller.import') or FakeController))
+
+    render_scene.render_animations(tmp_path, [_motions(tmp_path)[0]], use_mesa=True)
+
+    assert events == ['view.create', 'drawing.import', 'controller.import', 'view.cleanup']
 
 
 def test_render_animations_reuses_drawing_and_resets_before_next_motion(tmp_path, monkeypatch, caplog):

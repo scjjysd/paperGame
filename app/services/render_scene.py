@@ -93,13 +93,18 @@ def _mesh_metrics(vertices, triangles, pin_count: int) -> Dict[str, int]:
 
 
 def _load_vendor_components():
-    """延迟导入 OpenGL 依赖，使批量编排可在无图形环境中完成契约测试。"""
+    """先仅加载不触发 OpenGL 平台选择的配置与 View 工厂。"""
     from animated_drawings.config import Config
-    from animated_drawings.controller.video_render_controller import VideoRenderController
+    from animated_drawings.view.view import View
+    return Config, View
+
+
+def _load_render_components():
+    """MesaView 设置 PyOpenGL 平台后才导入所有 GL 相关渲染类型。"""
     from animated_drawings.model.animated_drawing import AnimatedDrawing
     from animated_drawings.model.scene import Scene
-    from animated_drawings.view.view import View
-    return Config, VideoRenderController, AnimatedDrawing, Scene, View
+    from animated_drawings.controller.video_render_controller import VideoRenderController
+    return AnimatedDrawing, Scene, VideoRenderController
 
 
 def _switch_motion(drawing, scene, motion_cfg, retarget_cfg) -> None:
@@ -216,7 +221,7 @@ def render_animations(char_anno_dir, motions: Sequence[MotionRender], use_mesa=N
         scene_yaml.write_text(yaml.safe_dump(cfg))
         scene_yamls.append(scene_yaml)
 
-    Config, VideoRenderController, AnimatedDrawing, Scene, View = _load_vendor_components()
+    Config, View = _load_vendor_components()
     cwd = os.getcwd()
     view = None
     try:
@@ -224,8 +229,9 @@ def render_animations(char_anno_dir, motions: Sequence[MotionRender], use_mesa=N
         configs = [Config(str(scene_yaml)) for scene_yaml in scene_yamls]
         first_character = configs[0].scene.animated_characters[0]
         configs[0].scene.animated_characters = []
-        scene = Scene(configs[0].scene)
         view = View.create_view(configs[0].view)
+        AnimatedDrawing, Scene, VideoRenderController = _load_render_components()
+        scene = Scene(configs[0].scene)
 
         LoggedAnimatedDrawing = _logged_animated_drawing_class(AnimatedDrawing)
         first_name = items[0][0]
