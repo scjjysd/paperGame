@@ -1,12 +1,29 @@
 """角色动画管线门面：PNG -> 透明 PNG 精灵表 + 元数据。"""
+from contextlib import contextmanager
+import logging
 from pathlib import Path
+import time
 from typing import Dict, Sequence
 
 from app.services.annotation_repair import repair_or_reject
 from app.services.annotations import analyze
 from app.services.motion_2d import FPS, synth_motion
-from app.services.render_scene import render_animation
+from app.services.render_scene import render_animation, render_animations
 from app.services.sprite_sheet import build_sprite_sheet, compute_content_bbox
+
+
+logger = logging.getLogger(__name__)
+
+
+@contextmanager
+def _timed_stage(stage: str, character_dir: Path):
+    """无论阶段是否抛错，均记录已经消耗的时间以定位慢失败任务。"""
+    started = time.perf_counter()
+    try:
+        yield
+    finally:
+        logger.info('角色渲染计时：character=%s stage=%s elapsed=%.3fs',
+                    character_dir, stage, time.perf_counter() - started)
 
 
 class CharacterPipeline:
@@ -35,42 +52,48 @@ class CharacterPipeline:
     def render_character(self, input_path, motions: Sequence[str] = ('run', 'jump')) -> Dict:
         """角色级入口：标注只做一次，将各动作角色缩放到统一像素高度后构建精灵表，保证视觉大小一致。"""
         char_dir = self.out_root / Path(input_path).stem
-        (char_dir / 'anno').mkdir(parents=True, exist_ok=True)
-        analyze(input_path, char_dir / 'anno')
-        repair_or_reject(char_dir / 'anno')  # 补回被 vendor 丢弃的部件；修不好则 needs_correction
-        char_cfg = char_dir / 'anno' / 'char_cfg.yaml'
+        with _timed_stage('total', char_dir):
+            (char_dir / 'anno').mkdir(parents=True, exist_ok=True)
+            with _timed_stage('analyze', char_dir):
+                analyze(input_path, char_dir / 'anno')
+            with _timed_stage('repair', char_dir):
+                repair_or_reject(char_dir / 'anno')
+            char_cfg = char_dir / 'anno' / 'char_cfg.yaml'
 
-        gifs = {}
-        for m in motions:
-            out_dir = char_dir / m
-            out_dir.mkdir(parents=True, exist_ok=True)
-            gifs[m] = render_animation(char_dir / 'anno', synth_motion(char_cfg, m, out_dir),
-                                       out_dir / f'{m}.gif')
+            motion_renders = []
+            with _timed_stage('synth_motion', char_dir):
+                for m in motions:
+                    out_dir = char_dir / m
+                    out_dir.mkdir(parents=True, exist_ok=True)
+                    motion_renders.append((m, synth_motion(char_cfg, m, out_dir),
+                                           out_dir / f'{m}.gif'))
+            gifs = render_animations(char_dir / 'anno', motion_renders)
 
-        # 测量每个动画的内容尺寸，计算缩放到统一目标高度所需的 scale
-        content_sizes = {}
-        max_h = 0
-        for m, gif in gifs.items():
-            l, t, r, b = compute_content_bbox(gif)
-            content_sizes[m] = (r - l, b - t)
-            max_h = max(max_h, b - t)
+            with _timed_stage('sprite_sheet', char_dir):
+                # 测量每个动画的内容尺寸，计算缩放到统一目标高度所需的 scale
+                content_sizes = {}
+                max_h = 0
+                for m, gif in gifs.items():
+                    l, t, r, b = compute_content_bbox(gif)
+                    content_sizes[m] = (r - l, b - t)
+                    max_h = max(max_h, b - t)
 
-        pad = max(1, round(max_h * 0.1))
-        frame_w = 0
-        scales = {}
-        for m, (cw, ch) in content_sizes.items():
-            s = max_h / ch if ch > 0 else 1.0
-            scales[m] = s
-            sw = max(1, round(cw * s))
-            frame_w = max(frame_w, sw)
-        frame_w += 2 * pad
-        frame_h = max_h + 2 * pad
+                pad = max(1, round(max_h * 0.1))
+                frame_w = 0
+                scales = {}
+                for m, (cw, ch) in content_sizes.items():
+                    s = max_h / ch if ch > 0 else 1.0
+                    scales[m] = s
+                    sw = max(1, round(cw * s))
+                    frame_w = max(frame_w, sw)
+                frame_w += 2 * pad
+                frame_h = max_h + 2 * pad
 
-        animations = {}
-        for m in motions:
-            out_dir = char_dir / m
-            meta = build_sprite_sheet(gifs[m], out_dir / f'{m}.png', fps=FPS,
-                                      frame_size=(frame_w, frame_h), scale=scales[m])
-            animations[m] = {**meta, 'spriteSheetUrl': str(out_dir / f'{m}.png')}
+                animations = {}
+                for m in motions:
+                    out_dir = char_dir / m
+                    meta = build_sprite_sheet(gifs[m], out_dir / f'{m}.png', fps=FPS,
+                                              frame_size=(frame_w, frame_h), scale=scales[m])
+                    animations[m] = {**meta, 'spriteSheetUrl': str(out_dir / f'{m}.png')}
 
-        return {'status': 'ready', 'animations': animations}
+            return {'status': 'ready', 'animations': animations}

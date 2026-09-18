@@ -253,8 +253,10 @@ def test_render_animations_reuses_drawing_and_resets_before_next_motion(tmp_path
 
 
 @pytest.mark.parametrize('fail_action', ['run', 'jump'])
-def test_render_animations_cleans_view_once_when_an_action_fails(tmp_path, monkeypatch, fail_action):
+def test_render_animations_cleans_view_once_when_an_action_fails(tmp_path, monkeypatch,
+                                                                 caplog, fail_action):
     """任一动作抛错时必须收尾该动作资源，并只释放一次唯一 OpenGL View。"""
+    caplog.set_level(logging.INFO, logger=render_scene.__name__)
     events = []
     _install_lifecycle_fakes(monkeypatch, events, fail_action=fail_action)
 
@@ -264,6 +266,7 @@ def test_render_animations_cleans_view_once_when_an_action_fails(tmp_path, monke
     assert events.count(('progress.close', fail_action)) == 1
     assert events.count(('writer.cleanup', fail_action)) == 1
     assert events.count('view.cleanup') == 1
+    assert 'stage=render_%s' % fail_action in caplog.text
 
 
 def test_render_animations_fails_when_controller_does_not_create_gif(tmp_path, monkeypatch):

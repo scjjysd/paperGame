@@ -1,4 +1,5 @@
 """生成 AnimatedDrawings 渲染场景 YAML 并执行渲染，输出透明 GIF。"""
+from contextlib import contextmanager
 import logging
 import os
 import time
@@ -21,6 +22,17 @@ VENDOR_RETARGET_CFG = str(VENDOR / 'examples' / 'config' / 'retarget' / 'fair1_p
 CAMERA_POS = [0.0, 0.7, 2.8]
 MotionRender = Tuple[str, Path, Path]
 logger = logging.getLogger(__name__)
+
+
+@contextmanager
+def _timed_render_stage(stage: str, action: str) -> None:
+    """即使 vendor 阶段失败也输出已耗时间，保留慢失败诊断信息。"""
+    started = time.perf_counter()
+    try:
+        yield
+    finally:
+        logger.info('角色渲染计时：action=%s stage=%s elapsed=%.3fs',
+                    action, stage, time.perf_counter() - started)
 
 
 def _resolve_motion_cfg(motion_cfg_fn: Path) -> Path:
@@ -215,10 +227,12 @@ def render_animations(char_anno_dir, motions: Sequence[MotionRender], use_mesa=N
         view = View.create_view(configs[0].view)
 
         LoggedAnimatedDrawing = _logged_animated_drawing_class(AnimatedDrawing)
-        static_init_started = time.perf_counter()
-        drawing = LoggedAnimatedDrawing(*first_character)
-        static_init_elapsed = time.perf_counter() - static_init_started
         first_name = items[0][0]
+        static_init_started = time.perf_counter()
+        with _timed_render_stage('static_scene_init', first_name):
+            with _timed_render_stage('retarget_%s' % first_name, first_name):
+                drawing = LoggedAnimatedDrawing(*first_character)
+        static_init_elapsed = time.perf_counter() - static_init_started
         logger.info('静态角色初始化（含网格、ARAP 与动作 %s retarget）完成，耗时 %.3f 秒',
                     first_name, static_init_elapsed)
         logger.info('动作 %s retarget 完成（包含静态角色初始化），耗时 %.3f 秒',
@@ -231,16 +245,18 @@ def render_animations(char_anno_dir, motions: Sequence[MotionRender], use_mesa=N
             if index:
                 _, action_retarget_cfg, action_motion_cfg = configs[index].scene.animated_characters[0]
                 retarget_started = time.perf_counter()
-                _switch_motion(drawing, scene, action_motion_cfg, action_retarget_cfg)
+                with _timed_render_stage('retarget_%s' % name, name):
+                    _switch_motion(drawing, scene, action_motion_cfg, action_retarget_cfg)
                 logger.info('动作 %s retarget 完成，耗时 %.3f 秒', name,
                             time.perf_counter() - retarget_started)
             controller = SequentialVideoRenderController(configs[index].controller, scene, view)
             render_started = time.perf_counter()
-            try:
-                controller.run()
-            except Exception:
-                controller._cleanup_after_run_loop()
-                raise
+            with _timed_render_stage('render_%s' % name, name):
+                try:
+                    controller.run()
+                except Exception:
+                    controller._cleanup_after_run_loop()
+                    raise
             logger.info('动作 %s 渲染完成，耗时 %.3f 秒', name,
                         time.perf_counter() - render_started)
             if not output_gif.exists():
