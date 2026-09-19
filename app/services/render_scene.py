@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Dict, List, Sequence, Tuple
 
 import yaml
+from PIL import Image
 
 from app.services import motion_2d
 from app.services.annotations import VENDOR      # vendor 路径单一来源，不在本模块重复推导
@@ -119,7 +120,33 @@ def _switch_motion(drawing, scene, motion_cfg, retarget_cfg) -> None:
     drawing.update()
 
 
-def _logged_animated_drawing_class(animated_drawing):
+def _log_dropped_pins(drawing, action_batch: str) -> None:
+    """记录 vendor ARAP 未接受的 pin，坐标保持 vendor 提供的归一化值。"""
+    try:
+        skeleton = drawing.char_cfg.skeleton
+        pin_mask = drawing.arap.pin_mask
+        if len(pin_mask) != len(skeleton):
+            logger.warning('ARAP 丢失 pin 诊断失败：actions=%s，pin_mask/skeleton 长度不一致：'
+                           'pin_mask=%d，skeleton=%d', action_batch, len(pin_mask), len(skeleton))
+            return
+        dropped = [(joint['name'], joint['loc']) for joint, is_pinned in zip(skeleton, pin_mask)
+                   if not is_pinned]
+        if dropped:
+            details = ', '.join('%s normalized_loc=%s' % (name, loc)
+                                for name, loc in dropped)
+            logger.warning('ARAP 丢失 pin：actions=%s，dropped=%d/%d，%s',
+                           action_batch, len(dropped), len(skeleton), details)
+    except (AttributeError, KeyError, TypeError, ValueError) as error:
+        logger.warning('ARAP 丢失 pin 诊断失败：actions=%s，%s', action_batch, error)
+
+
+def _gif_frame_count(path: Path) -> int:
+    """读取已写盘 GIF 的实际帧数；损坏产物由调用方按渲染失败处理。"""
+    with Image.open(path) as gif:
+        return gif.n_frames
+
+
+def _logged_animated_drawing_class(animated_drawing, action_batch: str):
     """以运行时子类替代 vendor monkeypatch，保留项目层扩展点。"""
     class _LoggedAnimatedDrawing(animated_drawing):
         def _generate_mesh(self) -> None:
@@ -142,6 +169,7 @@ def _logged_animated_drawing_class(animated_drawing):
                         'A2.shape=%s，A2.nbytes=%d',
                         self.arap.pin_num, self.arap.A1.shape, self.arap.A1.nbytes,
                         self.arap.A2.shape, self.arap.A2.nbytes)
+            _log_dropped_pins(self, action_batch)
     return _LoggedAnimatedDrawing
 
 
@@ -233,7 +261,8 @@ def render_animations(char_anno_dir, motions: Sequence[MotionRender], use_mesa=N
         AnimatedDrawing, Scene, VideoRenderController = _load_render_components()
         scene = Scene(configs[0].scene)
 
-        LoggedAnimatedDrawing = _logged_animated_drawing_class(AnimatedDrawing)
+        action_batch = '/'.join(name for name, _, _ in items)
+        LoggedAnimatedDrawing = _logged_animated_drawing_class(AnimatedDrawing, action_batch)
         first_name = items[0][0]
         static_init_started = time.perf_counter()
         with _timed_render_stage('static_scene_init', first_name):
@@ -271,6 +300,19 @@ def render_animations(char_anno_dir, motions: Sequence[MotionRender], use_mesa=N
                         time.perf_counter() - render_started)
             if not output_gif.exists():
                 raise RuntimeError('render finished but gif missing: %s' % output_gif)
+            gif_frames = _gif_frame_count(output_gif)
+            try:
+                declared_frames = drawing.retargeter.bvh.frame_max_num
+                rendered_frames = controller.frames_rendered
+                if (declared_frames == rendered_frames == gif_frames):
+                    logger.info('动作帧数一致：声明=%d，渲染=%d，GIF=%d',
+                                declared_frames, rendered_frames, gif_frames)
+                else:
+                    logger.warning('动作帧数不一致：声明=%d，渲染=%d，GIF=%d；'
+                                   '编码器可能合并连续重复帧',
+                                   declared_frames, rendered_frames, gif_frames)
+            except (AttributeError, KeyError, TypeError, ValueError) as error:
+                logger.warning('动作帧数诊断失败：action=%s，%s', name, error)
             rendered[name] = output_gif
         return rendered
     finally:

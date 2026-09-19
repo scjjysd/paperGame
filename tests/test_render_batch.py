@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 import yaml
+from PIL import Image
 
 from app.services import render_scene
 
@@ -33,7 +34,7 @@ def test_mesh_metrics_calculates_unique_edges_and_dense_bytes():
     assert metrics['normal2_bytes'] == 4 * 4 * 4
 
 
-def test_logged_animated_drawing_logs_mesh_before_arap_and_actual_matrices_after(caplog, monkeypatch):
+def test_logged_animated_drawing_logs_dropped_pin_after_arap_construction(caplog, monkeypatch):
     """移动网格 hook 到 ARAP 后会失去 OOM 前的关键诊断日志。"""
     caplog.set_level(logging.INFO, logger=render_scene.__name__)
     events = []
@@ -51,11 +52,15 @@ def test_logged_animated_drawing_logs_mesh_before_arap_and_actual_matrices_after
     class FakeBase:
         def __init__(self):
             self.mask = np.zeros((3, 4), dtype=np.uint8)
-            self.char_cfg = SimpleNamespace(skeleton=[{'name': 'a'}, {'name': 'b'}])
+            self.char_cfg = SimpleNamespace(skeleton=[
+                {'name': 'a', 'loc': [0.25, 0.5]},
+                {'name': 'b', 'loc': [0.75, 0.5]},
+            ])
             self._generate_mesh()
             events.append('arap.construct')
             self.arap = SimpleNamespace(
                 pin_num=1,
+                pin_mask=np.array([True, False]),
                 A1=np.zeros((2, 4), dtype=np.float32),
                 A2=np.zeros((1, 2), dtype=np.float32),
             )
@@ -67,7 +72,7 @@ def test_logged_animated_drawing_logs_mesh_before_arap_and_actual_matrices_after
             }
             events.append('mesh.generated')
 
-    Drawing = render_scene._logged_animated_drawing_class(FakeBase)
+    Drawing = render_scene._logged_animated_drawing_class(FakeBase, 'run/jump')
     Drawing()
 
     messages = [record.getMessage() for record in caplog.records]
@@ -88,6 +93,52 @@ def test_logged_animated_drawing_logs_mesh_before_arap_and_actual_matrices_after
     assert 'A1.nbytes=32' in messages[actual_index]
     assert 'A2.shape=(1, 2)' in messages[actual_index]
     assert 'A2.nbytes=8' in messages[actual_index]
+    dropped_pin_message = next(message for message in messages if 'dropped=1/2' in message)
+    assert 'actions=run/jump' in dropped_pin_message
+    assert 'b' in dropped_pin_message
+    assert 'normalized_loc=[0.75, 0.5]' in dropped_pin_message
+
+
+def test_logged_animated_drawing_warns_without_breaking_when_pin_diagnostics_fields_missing(caplog):
+    """诊断字段缺失时不得把 vendor 正常构造转换为渲染失败。"""
+    caplog.set_level(logging.WARNING, logger=render_scene.__name__)
+
+    class FakeBase:
+        def __init__(self):
+            self.arap = SimpleNamespace(pin_num=1,
+                                        A1=np.zeros((1, 1), dtype=np.float32),
+                                        A2=np.zeros((1, 1), dtype=np.float32))
+
+    Drawing = render_scene._logged_animated_drawing_class(FakeBase, 'run/jump')
+
+    Drawing()
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert len(messages) == 1
+    assert '丢失 pin 诊断失败' in messages[0]
+    assert 'actions=run/jump' in messages[0]
+
+
+@pytest.mark.parametrize('pin_mask', [np.array([True]), np.array([True, False, True])])
+def test_log_dropped_pins_warns_and_skips_incomplete_diagnosis_on_mask_length_mismatch(
+        caplog, pin_mask):
+    """zip 截断会把不完整的比较误报成完整的丢 pin 结论。"""
+    caplog.set_level(logging.WARNING, logger=render_scene.__name__)
+    drawing = SimpleNamespace(
+        char_cfg=SimpleNamespace(skeleton=[
+            {'name': 'root', 'loc': [0.25, 0.5]},
+            {'name': 'hand', 'loc': [0.75, 0.5]},
+        ]),
+        arap=SimpleNamespace(pin_mask=pin_mask),
+    )
+
+    render_scene._log_dropped_pins(drawing, 'run/jump')
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert len(messages) == 1
+    assert 'pin_mask/skeleton 长度不一致' in messages[0]
+    assert 'actions=run/jump' in messages[0]
+    assert 'dropped=' not in messages[0]
 
 
 def test_render_animations_rejects_empty_motion_list(tmp_path):
@@ -121,7 +172,8 @@ def test_render_animations_validates_inputs_before_checking_vendor_assets(tmp_pa
 
 
 def _install_lifecycle_fakes(monkeypatch, events, fail_action=None, omit_output=False,
-                             render_error=None, writer_cleanup_error=None):
+                             render_error=None, writer_cleanup_error=None, declared_frames=1,
+                             frames_rendered=1, writer_frame_colors=None):
     """替代缓慢的 OpenGL/vendor 边界，保留批量编排本身的所有真实调用。"""
     configs = []
 
@@ -141,9 +193,12 @@ def _install_lifecycle_fakes(monkeypatch, events, fail_action=None, omit_output=
         def __init__(self, character, retarget_cfg, motion_cfg):
             self.retarget_cfg = retarget_cfg
             self.motion_cfg = motion_cfg
-            self.arap = SimpleNamespace(pin_num=1,
+            self.char_cfg = SimpleNamespace(skeleton=[{'name': 'root', 'loc': [0.5, 0.5]}])
+            self.arap = SimpleNamespace(pin_num=1, pin_mask=np.array([True]),
                                         A1=np.zeros((2, 2), dtype=np.float32),
                                         A2=np.zeros((1, 1), dtype=np.float32))
+            self.retargeter = SimpleNamespace(
+                bvh=SimpleNamespace(frame_max_num=declared_frames))
             events.append(('drawing.create', motion_cfg.name))
 
         def set_time(self, value):
@@ -200,7 +255,7 @@ def _install_lifecycle_fakes(monkeypatch, events, fail_action=None, omit_output=
             self.cfg = cfg
             self.scene = scene
             self.view = view
-            self.frames_rendered = 1
+            self.frames_rendered = frames_rendered
             self.progress_bar = FakeProgress(cfg.name)
             self.video_writer = FakeWriter(cfg.name)
 
@@ -211,7 +266,13 @@ def _install_lifecycle_fakes(monkeypatch, events, fail_action=None, omit_output=
                     raise render_error('original render failure')
                 raise RuntimeError('render failed: %s' % fail_action)
             if not omit_output:
-                Path(self.cfg.output_video_path).write_text(self.cfg.name)
+                colors = (writer_frame_colors if writer_frame_colors is not None
+                          else list(range(frames_rendered)))
+                events.append(('writer.submit_frames', self.cfg.name, len(colors)))
+                frames = [Image.new('RGBA', (2, 2), (color, 0, 0, 255))
+                          for color in colors]
+                frames[0].save(self.cfg.output_video_path, save_all=True,
+                               append_images=frames[1:], format='GIF', loop=0)
             events.append(('render.end', self.cfg.name))
             self._cleanup_after_run_loop()
 
@@ -274,7 +335,7 @@ def test_render_animations_creates_mesa_view_before_loading_video_controller(tmp
             self.video_writer = SimpleNamespace(cleanup=lambda: None)
 
         def run(self):
-            Path(self.cfg.output_video_path).write_text('rendered')
+            Image.new('RGBA', (2, 2), (0, 0, 0, 0)).save(self.cfg.output_video_path, format='GIF')
 
     monkeypatch.setattr(render_scene, '_load_vendor_components',
                         lambda: (FakeConfig, FakeView))
@@ -415,3 +476,31 @@ def test_render_animations_fails_when_controller_does_not_create_gif(tmp_path, m
         render_scene.render_animations(tmp_path, _motions(tmp_path))
 
     assert events.count('view.cleanup') == 1
+
+
+def test_render_animations_logs_matching_declared_rendered_and_gif_frame_counts(tmp_path,
+                                                                                  monkeypatch, caplog):
+    """三方帧数一致时应留下可审计的正常渲染诊断。"""
+    caplog.set_level(logging.INFO, logger=render_scene.__name__)
+    _install_lifecycle_fakes(monkeypatch, [], declared_frames=2, frames_rendered=2,
+                             writer_frame_colors=[0, 1])
+
+    render_scene.render_animations(tmp_path, [_motions(tmp_path)[0]])
+
+    assert '声明=2，渲染=2，GIF=2' in caplog.text
+    assert not [record for record in caplog.records if record.levelno == logging.WARNING]
+
+
+def test_render_animations_frame_count_warns_when_gif_encoder_merges_repeated_frames(tmp_path,
+                                                                                      monkeypatch, caplog):
+    """编码器丢帧不能被 controller 已渲染帧数掩盖。"""
+    caplog.set_level(logging.WARNING, logger=render_scene.__name__)
+    events = []
+    _install_lifecycle_fakes(monkeypatch, events, declared_frames=8, frames_rendered=8,
+                             writer_frame_colors=[0, 1, 2, 3, 3, 4, 5, 6])
+
+    render_scene.render_animations(tmp_path, [_motions(tmp_path)[0]])
+
+    assert ('writer.submit_frames', 'run', 8) in events
+    assert '声明=8，渲染=8，GIF=7' in caplog.text
+    assert '编码器可能合并连续重复帧' in caplog.text

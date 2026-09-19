@@ -202,7 +202,7 @@ jjhks/
 | `ad-torchserve` | `paper-game/ad-torchserve:local` | 8080 推理 / 8081 管理 | 涂鸦检测、分割、骨架估计 | 内存上限 16GB；python urllib 探活，`start_period: 60s`（模型加载慢） |
 | `pg-redis` | `redis:7-alpine` | — | 队列 + 任务状态 | `redis-cli ping` 健康检查 |
 | `pg-api` | `paper-game/server:local` | 8000 | 上传、轮询、静态伺服产物、审查页 | `uvicorn app.main:app`；卷 `./out → /data/out`；`PUBLIC_BASE_URL` / `CORS_*` / `LOG_*` |
-| `pg-worker` | 同 api 镜像 | — | 消费队列、子进程渲染 | `RENDER_USE_MESA=true`；`RENDER_MAX_DIM=800`；`RENDER_ARAP_SOLVER=regularized`（可切回 `vendor`）；`stop_grace_period: 300s`（≥120s×2 次尝试） |
+| `pg-worker` | 同 api 镜像 | — | 消费队列、子进程渲染 | `RENDER_USE_MESA=true`；`RENDER_MAX_DIM=800（渲染前最长边，降低 ARAP 网格规模）`；`RENDER_ARAP_SOLVER=regularized`（可切回 `vendor`）；`ANALYZE_TIMEOUT_SECONDS=30`（仅分析总阶段，超时按基础设施错误重试）；`stop_grace_period: 300s`（≥120s×2 次尝试，防 docker 默认 10s SIGKILL 打断渲染） |
 
 api 与 worker **分开部署**：故障域隔离、可独立 restart、可 `--scale worker=N` 伸缩；共享镜像使边际成本仅一份基础运行时内存。
 
@@ -221,6 +221,7 @@ api 与 worker **分开部署**：故障域隔离、可独立 restart、可 `--s
 |---|---|---|
 | 子进程执行渲染 | `python -m app.workers.render_runner <job_dir>` | `os.chdir(VENDOR)` 是进程级状态，在 FastAPI 并发下有竞态；GLFW/OpenGL 上下文偶发初始化全挂（尖刺实测过一次 20/20 全失败，重跑即恢复）只损失当前任务 |
 | 子进程超时 | 120s | 尖刺实测单任务 ≤40s 的 3 倍余量 |
+| 分析总超时 | `ANALYZE_TIMEOUT_SECONDS=30` | 只覆盖一次 `image_to_annotations` 调用；超时不产生 `needs_correction`，`render_runner` 以非 0 退出并由 worker 按基础设施错误重试 |
 | 最大尝试次数 | 2（即重试 1 次） | 仅基础设施故障重试；业务失败（`needs_correction`）不重试 |
 | 退出码协议 | 0 = 业务终态已写 `result.json`；非 0 = 基础设施故障 | 让主循环能区分「渲染判定为无人形」和「渲染进程崩了」 |
 | 错误码映射 | 超时 → `RENDER_TIMEOUT`；崩溃/result.json 损坏 → `RENDER_CRASHED`；动作资产缺失 → `ASSET_MISSING` | 客户端据稳定错误码分支处理 |

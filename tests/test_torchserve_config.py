@@ -63,3 +63,12 @@ def test_compose_enables_regularized_arap_with_vendor_fallback():
 
     assert compose['services']['worker']['environment']['RENDER_ARAP_SOLVER'] == (
         '${RENDER_ARAP_SOLVER:-regularized}')
+
+
+def test_api_disables_duplicate_uvicorn_access_log():
+    compose = yaml.safe_load((ROOT / 'docker-compose.yml').read_text())
+    assert '--no-access-log' in compose['services']['api']['command']
+
+    main_source = (ROOT / 'app' / 'main.py').read_text(encoding='utf-8')
+    assert 'async def log_request(' in main_source
+    assert "emit('请求完成：%s %s -> %d，耗时 %.1f 毫秒'" in main_source

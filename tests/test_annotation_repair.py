@@ -1,8 +1,10 @@
 """annotation_repair 的关键断言：补回丢弃部件、保持单连通、关节吸附、扩框护栏、门禁时序。"""
 import cv2
+import logging
 import numpy as np
 import pytest
 import yaml
+from contextlib import contextmanager
 from PIL import Image
 from scipy import ndimage
 from skimage.morphology import skeletonize
@@ -278,6 +280,147 @@ def test_clean_annotation_skips_mesh_candidate_checks(tmp_path, monkeypatch):
                         lambda *_: pytest.fail('clean annotation should skip mesh checks'))
     info = repair_or_reject(anno)
     assert info['crop'] == 'plain'
+
+
+def test_repair_logs_fast_path_stage_timings(tmp_path, caplog):
+    image = _drawing(halo=False)
+    anno = _write_anno(tmp_path, image, _body_only_mask(),
+                       _skeleton(neck_loc=(150, 200)))
+    cv2.imwrite(str(anno / 'image.png'), image)
+    (anno / 'bounding_box.yaml').write_text(yaml.safe_dump(
+        {'top': 0, 'bottom': SIZE, 'left': 0, 'right': SIZE}))
+
+    with caplog.at_level(logging.INFO):
+        repair_or_reject(anno)
+
+    stages = {record.message.split('stage=')[1].split()[0]
+              for record in caplog.records if '标注修复计时' in record.message}
+    assert {'baseline', 'clean_check', 'skeleton', 'write'} <= stages
+    assert not any(stage.startswith(('mesh.', 'candidate.')) for stage in stages)
+
+
+def test_skeleton_timing_covers_projection_and_tip_extension(tmp_path, monkeypatch):
+    image = _drawing(halo=False)
+    anno = _write_anno(tmp_path, image, _body_only_mask(),
+                       _skeleton(neck_loc=(150, 200)))
+    cv2.imwrite(str(anno / 'image.png'), image)
+    (anno / 'bounding_box.yaml').write_text(yaml.safe_dump(
+        {'top': 0, 'bottom': SIZE, 'left': 0, 'right': SIZE}))
+
+    active = []
+    calls = []
+
+    @contextmanager
+    def tracking_stage(_anno_dir, stage):
+        active.append(stage)
+        try:
+            yield
+        finally:
+            active.pop()
+
+    original_project = annotation_repair.project_joints_to_axis
+    original_extend = annotation_repair.extend_limb_tips
+
+    def tracked_project(*args, **kwargs):
+        calls.append(('project', tuple(active)))
+        return original_project(*args, **kwargs)
+
+    def tracked_extend(*args, **kwargs):
+        calls.append(('extend', tuple(active)))
+        return original_extend(*args, **kwargs)
+
+    monkeypatch.setattr(annotation_repair, '_timed_repair_stage', tracking_stage)
+    monkeypatch.setattr(annotation_repair, 'project_joints_to_axis', tracked_project)
+    monkeypatch.setattr(annotation_repair, 'extend_limb_tips', tracked_extend)
+    repair_or_reject(anno)
+
+    assert [name for name, _ in calls] == ['project', 'extend']
+    assert all(active_stages == ('skeleton',) for _, active_stages in calls)
+
+
+def test_repair_times_plain_rebuild_candidate(tmp_path, caplog):
+    image = _drawing()
+    anno = _write_anno(tmp_path, image[190:340, 160:240],
+                       _body_only_mask()[190:340, 160:240],
+                       _skeleton(neck_loc=(40, 20), root_loc=(40, 120)))
+    cv2.imwrite(str(anno / 'image.png'), image)
+    (anno / 'bounding_box.yaml').write_text(yaml.safe_dump(
+        {'top': 190, 'bottom': 340, 'left': 160, 'right': 240}))
+
+    with caplog.at_level(logging.INFO):
+        with pytest.raises(NeedsCorrection):
+            repair_or_reject(anno)
+
+    stages = {record.message.split('stage=')[1].split()[0]
+              for record in caplog.records if '标注修复计时' in record.message}
+    assert 'candidate.plain' in stages
+
+
+def test_repair_times_repaired_plain_without_image_or_bbox(tmp_path, caplog):
+    anno = _write_anno(tmp_path, _drawing(halo=False), _body_only_mask(),
+                       _skeleton(neck_loc=(150, 200)))
+
+    with caplog.at_level(logging.INFO):
+        repair_or_reject(anno)
+
+    stages = {record.message.split('stage=')[1].split()[0]
+              for record in caplog.records if '标注修复计时' in record.message}
+    assert 'candidate.plain' in stages
+
+
+def test_repair_logs_only_executed_candidate_and_mesh_stages(tmp_path, caplog, monkeypatch):
+    image = _drawing()
+    anno = _write_anno(tmp_path, image[190:340, 160:240],
+                       _body_only_mask()[190:340, 160:240],
+                       _skeleton(neck_loc=(40, 20), root_loc=(40, 120)))
+    cv2.imwrite(str(anno / 'image.png'), image)
+    (anno / 'bounding_box.yaml').write_text(yaml.safe_dump(
+        {'top': 190, 'bottom': 340, 'left': 160, 'right': 240}))
+
+    active = []
+    candidate_calls = []
+    mesh_calls = []
+    original_candidate = annotation_repair._candidate
+    original_stage = annotation_repair._timed_repair_stage
+
+    @contextmanager
+    def tracking_stage(anno_dir, stage):
+        with original_stage(anno_dir, stage):
+            active.append(stage)
+            try:
+                yield
+            finally:
+                active.pop()
+
+    def tracked_candidate(*args, **kwargs):
+        candidate_calls.append((kwargs.get('ref_box'), tuple(active)))
+        return original_candidate(*args, **kwargs)
+
+    def tracked_mesh_unreachable(mask):
+        mesh_calls.append(tuple(active))
+        # 保持现有候选构造路径，令按墨迹扩框候选通过后停止 next()。
+        return 0
+
+    monkeypatch.setattr(annotation_repair, '_timed_repair_stage', tracking_stage)
+    monkeypatch.setattr(annotation_repair, '_candidate', tracked_candidate)
+    monkeypatch.setattr(annotation_repair, 'mesh_unreachable', tracked_mesh_unreachable)
+
+    with caplog.at_level(logging.INFO):
+        repair_or_reject(anno)
+
+    stages = {record.message.split('stage=')[1].split()[0]
+              for record in caplog.records if '标注修复计时' in record.message}
+    assert candidate_calls == [(None, ('candidate.plain',)),
+                               ({'top': 190, 'bottom': 340, 'left': 160, 'right': 240},
+                                ('candidate.ink',)),
+                               ({'top': 190, 'bottom': 340, 'left': 160, 'right': 240},
+                                ('candidate.pad',))]
+    assert mesh_calls == [('mesh.baseline',), ('mesh.ink',)]
+    assert {'candidate.plain', 'candidate.ink', 'candidate.pad',
+            'mesh.baseline', 'mesh.ink'} <= stages
+    assert not {'mesh.pad', 'mesh.plain'} & stages
+    assert {stage for stage in stages if stage.startswith('mesh.')} == {
+        stage for (stage,) in mesh_calls}
 
 
 def test_padding_recovers_ink_clipped_by_detector_box(tmp_path):

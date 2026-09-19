@@ -16,8 +16,11 @@ vendor 的标注产物有四类缺陷，本模块逐一对治（编号沿用 doc
 门禁：吸附前若仍有关节远离角色，说明 pose 估计本身不可信，抛 NeedsCorrection 走
 契约已有的 needs_correction 通道（返回 mask + 吸附后的关节给骨架确认页）。
 """
+from contextlib import contextmanager
+import logging
 import math
 import os
+import time
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -47,6 +50,18 @@ SKIP_RATIO = 0.004        # 丢失总量低于此占比视为干净样本，mask
 MESH_GRID = 40            # vendor _generate_mesh 的 linspace(0, img_dim, 40) 内部顶点数
 BORDER_MARGIN = 2         # vendor 要求 mask 不触边，否则 contour 查找失败
 RENDER_MAX_DIM = 800      # ARAP 前的最长边；保留原始标注尺寸，渲染副本可降采样
+
+logger = logging.getLogger(__name__)
+
+
+@contextmanager
+def _timed_repair_stage(anno_dir: Path, stage: str):
+    started = time.perf_counter()
+    try:
+        yield
+    finally:
+        logger.info('标注修复计时：anno=%s stage=%s elapsed=%.3fs',
+                    anno_dir, stage, time.perf_counter() - started)
 
 
 def _bridge_width(mask_shape) -> int:
@@ -449,15 +464,17 @@ def repair_or_reject(anno_dir) -> Dict:
     # vendor 原始标注 = 已知安全基线（20 份尖刺样本用它均渲染正常）。
     # 每一步修复都不得让网格连通性比它更差，否则宁可少修 —— 网格断开会让
     # vendor arap.py 卡在 `while np.linalg.det(...) == 0.0` 扰动循环（实测 s07 >300s、983% CPU）。
-    baseline = _disk_candidate(anno_dir, skeleton, repair=False)
+    with _timed_repair_stage(anno_dir, 'baseline'):
+        baseline = _disk_candidate(anno_dir, skeleton, repair=False)
 
     # 候选按偏好排序：墨迹框 > 按比例扩框 > 原框 > 基线
     options = []
     if image is not None and plain_box is not None:
         # 干净且已连通的 vendor 标注不需要重跑 segment、扩框候选和 mesh 检查。
         # SKIP_RATIO 与 rebuild_mask 的门槛一致，避免改变既有修复判定。
-        missing = _ink(baseline['texture']) & ~(baseline['mask'] > 0)
-        connected = ndimage.label(baseline['mask'] > 0)[1] <= 1
+        with _timed_repair_stage(anno_dir, 'clean_check'):
+            missing = _ink(baseline['texture']) & ~(baseline['mask'] > 0)
+            connected = ndimage.label(baseline['mask'] > 0)[1] <= 1
         if missing.sum() < SKIP_RATIO * baseline['mask'].size and connected:
             options.append((baseline, 'plain'))
         else:
@@ -467,16 +484,18 @@ def repair_or_reject(anno_dir) -> Dict:
             if baseline['texture'].shape[:2] == (
                     plain_box['bottom'] - plain_box['top'],
                     plain_box['right'] - plain_box['left']):
-                plain_mask = rebuild_mask(baseline['texture'], baseline['mask'])
-                plain_offset, plain_joint = worst_joint_offset(plain_mask, skeleton)
-                plain = {'texture': baseline['texture'], 'mask': plain_mask,
-                         'skeleton': list(skeleton), 'box': plain_box,
-                         'loss': loss_in_image_frame(image, plain_box, plain_mask),
-                         'offset': plain_offset, 'joint': plain_joint}
+                with _timed_repair_stage(anno_dir, 'candidate.plain'):
+                    plain_mask = rebuild_mask(baseline['texture'], baseline['mask'])
+                    plain_offset, plain_joint = worst_joint_offset(plain_mask, skeleton)
+                    plain = {'texture': baseline['texture'], 'mask': plain_mask,
+                             'skeleton': list(skeleton), 'box': plain_box,
+                             'loss': loss_in_image_frame(image, plain_box, plain_mask),
+                             'offset': plain_offset, 'joint': plain_joint}
             else:
                 # repair_or_reject 可能被重复调用，此时磁盘产物已使用扩框尺寸，
                 # bounding_box.yaml 仍是旧框，不能把两套坐标强行当作同一候选。
-                plain = _candidate(image, plain_box, skeleton)
+                with _timed_repair_stage(anno_dir, 'candidate.plain'):
+                    plain = _candidate(image, plain_box, skeleton)
             wider = [('ink', _ink_box(image, plain_box)),
                      ('pad', dict(zip(('top', 'bottom', 'left', 'right'),
                                       _pad_box(plain_box, height, width))))]
@@ -485,7 +504,8 @@ def repair_or_reject(anno_dir) -> Dict:
                 if box in seen:
                     continue
                 seen.append(box)
-                cand = _candidate(image, box, skeleton, ref_box=plain_box)
+                with _timed_repair_stage(anno_dir, f'candidate.{tag}'):
+                    cand = _candidate(image, box, skeleton, ref_box=plain_box)
                 # 扩框只在能救回更多笔画时才入候选：彩色/纹理背景（garlic）扩框后
                 # segment() 会抓错区域、丢失率反而上升。不比关节偏移：它由 F1 吸附归零、
                 # 并由门禁兼顶；加进护栏会误杀真正需要扩框的样本（s09：29.5%→6.2%）。
@@ -494,7 +514,8 @@ def repair_or_reject(anno_dir) -> Dict:
             options.append((plain, 'plain'))
     else:
         # 缺 image.png / bounding_box.yaml（旧产物或人工构造）时退回只修 mask
-        repaired = _disk_candidate(anno_dir, skeleton, repair=True)
+        with _timed_repair_stage(anno_dir, 'candidate.plain'):
+            repaired = _disk_candidate(anno_dir, skeleton, repair=True)
         options.append((repaired, 'plain'))
 
     # 在候选里挑全图丢失率最低的，而不是按固定优先级取第一个：实测少数样本
@@ -504,27 +525,33 @@ def repair_or_reject(anno_dir) -> Dict:
     if len(options) == 1 and options[0][0] is baseline:
         chosen, crop = options[0]
     else:
-        floor = mesh_unreachable(baseline['mask'])
-        chosen, crop = next(((c, t) for c, t in options if _mesh_ok(c, floor)),
+        with _timed_repair_stage(anno_dir, 'mesh.baseline'):
+            floor = mesh_unreachable(baseline['mask'])
+        def mesh_ok_timed(candidate, tag):
+            with _timed_repair_stage(anno_dir, f'mesh.{tag}'):
+                return _mesh_ok(candidate, floor)
+        chosen, crop = next(((c, t) for c, t in options if mesh_ok_timed(c, t)),
                             (baseline, 'baseline'))
 
     if not (chosen['mask'] > 0).any():
         raise NeedsCorrection('NO_CONTOUR', 'mask empty after repair')
 
     offset, joint = chosen['offset'], chosen['joint']
-    snapped, moved = project_joints_to_axis(chosen['skeleton'], chosen['mask'])
-    # 外推必须在吸附之后：吸附保证末端关节已落在 mask 内，才有可沿着走的起点。
-    # 放在门禁判定之前无害——门禁用的 offset 早在候选阶段（吸附前）算好。
-    snapped, extended = extend_limb_tips(snapped, chosen['mask'])
+    with _timed_repair_stage(anno_dir, 'skeleton'):
+        snapped, moved = project_joints_to_axis(chosen['skeleton'], chosen['mask'])
+        # 外推必须在吸附之后：吸附保证末端关节已落在 mask 内，才有可沿着走的起点。
+        # 放在门禁判定之前无害——门禁用的 offset 早在候选阶段（吸附前）算好。
+        snapped, extended = extend_limb_tips(snapped, chosen['mask'])
 
     # 先写回（含吸附后的骨架），再判门禁：确认页需要 mask 与 joints 互相一致
     height, width = chosen['mask'].shape[:2]
-    cv2.imwrite(str(anno_dir / 'texture.png'),
-                cv2.cvtColor(chosen['texture'], cv2.COLOR_BGR2BGRA))   # vendor 断言 texture 必须 RGBA
-    Image.fromarray(chosen['mask']).save(anno_dir / 'mask.png')
-    cfg.update({'skeleton': snapped, 'height': height, 'width': width})
-    cfg_path.write_text(yaml.safe_dump(cfg))
-    (anno_dir / 'joint_overlay.png').unlink(missing_ok=True)   # 已与新标注不符，留着会误导
+    with _timed_repair_stage(anno_dir, 'write'):
+        cv2.imwrite(str(anno_dir / 'texture.png'),
+                    cv2.cvtColor(chosen['texture'], cv2.COLOR_BGR2BGRA))   # vendor 断言 texture 必须 RGBA
+        Image.fromarray(chosen['mask']).save(anno_dir / 'mask.png')
+        cfg.update({'skeleton': snapped, 'height': height, 'width': width})
+        cfg_path.write_text(yaml.safe_dump(cfg))
+        (anno_dir / 'joint_overlay.png').unlink(missing_ok=True)   # 已与新标注不符，留着会误导
 
     if offset > MAX_JOINT_OFFSET:
         raise NeedsCorrection(
