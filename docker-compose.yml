@@ -156,6 +156,7 @@ services:
       OUT_ROOT: /data/out
       RENDER_USE_MESA: "true"
       TORCHSERVE_UPSTREAM: torchserve:8080
+      ANALYZE_TIMEOUT_SECONDS: ${ANALYZE_TIMEOUT_SECONDS:-30}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_KEEP_DAYS: ${LOG_KEEP_DAYS:-0}
     volumes:
