@@ -56,3 +56,12 @@ def test_compose_invokes_readonly_entrypoint_through_shell():
     assert service['entrypoint'] == ['/bin/sh', '/torchserve-entrypoint.sh']
     assert service['environment']['TORCHSERVE_WORKERS_PER_MODEL'] == '${TORCHSERVE_WORKERS_PER_MODEL:-}'
     assert './docker/torchserve-entrypoint.sh:/torchserve-entrypoint.sh:ro' in service['volumes']
+
+
+def test_api_disables_duplicate_uvicorn_access_log():
+    compose = yaml.safe_load((ROOT / 'docker-compose.yml').read_text())
+    assert '--no-access-log' in compose['services']['api']['command']
+
+    main_source = (ROOT / 'app' / 'main.py').read_text(encoding='utf-8')
+    assert 'async def log_request(' in main_source
+    assert "emit('请求完成：%s %s -> %d，耗时 %.1f 毫秒'" in main_source
