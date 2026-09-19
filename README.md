@@ -202,11 +202,11 @@ jjhks/
 | `ad-torchserve` | `paper-game/ad-torchserve:local` | 8080 推理 / 8081 管理 | 涂鸦检测、分割、骨架估计 | 内存上限 16GB；python urllib 探活，`start_period: 60s`（模型加载慢） |
 | `pg-redis` | `redis:7-alpine` | — | 队列 + 任务状态 | `redis-cli ping` 健康检查 |
 | `pg-api` | `paper-game/server:local` | 8000 | 上传、轮询、静态伺服产物、审查页 | `uvicorn app.main:app`；卷 `./out → /data/out`；`PUBLIC_BASE_URL` / `CORS_*` / `LOG_*` |
-| `pg-worker` | 同 api 镜像 | — | 消费队列、子进程渲染 | `RENDER_USE_MESA=true`；`RENDER_MAX_DIM=800`（渲染前最长边，降低 ARAP 网格规模）；`stop_grace_period: 300s`（≥120s×2 次尝试，防 docker 默认 10s SIGKILL 打断渲染） |
+| `pg-worker` | 同 api 镜像 | — | 消费队列、子进程渲染 | `RENDER_USE_MESA=true`；`RENDER_MAX_DIM=800`；`RENDER_ARAP_SOLVER=regularized`（可切回 `vendor`）；`stop_grace_period: 300s`（≥120s×2 次尝试） |
 
 api 与 worker **分开部署**：故障域隔离、可独立 restart、可 `--scale worker=N` 伸缩；共享镜像使边际成本仅一份基础运行时内存。
 
-`entrypoint.sh` 里的 socat 转发是必需的：vendor 的 `image_to_annotations.py` 把 TorchServe 地址**硬编码为 `http://localhost:8080`**，而项目纪律是**零改动 vendor**，因此在容器内把 localhost:8080 转发到 `torchserve:8080`。
+`entrypoint.sh` 里的 socat 转发是必需的：vendor 的 `image_to_annotations.py` 把 TorchServe 地址**硬编码为 `http://localhost:8080`**。除 `arap.py` 中带 `PAPER_GAME_PATCH_BEGIN/END` 标记的可回退性能补丁外，项目不修改 vendor，因此在容器内把 localhost:8080 转发到 `torchserve:8080`。
 
 ### 5.2 队列与状态机
 
@@ -529,12 +529,32 @@ docker compose up -d --force-recreate torchserve
 角色 worker 仍串行执行 `run`、`jump`，但两动作共享一次静态角色、网格、ARAP 和 OpenGL
 初始化。`force=true` 保留给测试和人工明确重跑，普通客户端请求不应默认携带它。
 
+项目在 vendor 的 `arap.py` 中用 `PAPER_GAME_PATCH_BEGIN/END` 标出了可独立识别的法方程
+稳定化补丁。默认 `regularized` 用稀疏 LU 判断系统是否可解，跳过两个超大稠密矩阵的
+determinant；仅在 LU 判定奇异时提升到 float64 并添加 `1e-8` 对角正则项。需要排查数值或
+画面问题时可完整回退上游行为：
+
+```bash
+# 默认优化后端
+RENDER_ARAP_SOLVER=regularized docker compose up -d --force-recreate worker
+
+# 上游原始 determinant + 扰动循环
+RENDER_ARAP_SOLVER=vendor docker compose up -d --force-recreate worker
+```
+
+仅接受 `regularized` 或 `vendor`；其他值在渲染时明确失败，不静默选择后端。
+
 2026-09-18 在 Docker Desktop 16 GiB 限额、`TORCHSERVE_WORKERS_PER_MODEL=2` 下，通过正式
 API 对 `testdata/myson/man1.jpg` 执行一次 `force=true` 重跑：检测和姿态模型各为 2 worker；
 TorchServe idle 为 2.898 GiB，任务期间采样峰值为 3.377 GiB；角色 worker 峰值为 4.985 GiB。
 任务在 54 秒达到 `ready`（run 10 帧、jump 7 帧，统一 292x396），本次任务时间窗口没有 Docker
 OOM 事件，worker 的 `OOMKilled=false`。阶段日志记录了分析、修复、静态初始化、两动作渲染和
 精灵表耗时，可从 `out/logs/render-runner-YYYY-MM-DD.log` 查询。
+
+2026-09-19 在同一 Docker 环境和同一 `man1.jpg` 上复测：800px 标注下，`vendor` 管线耗时
+36.697 秒、静态初始化 20.726 秒、worker 采样峰值 3.751 GiB；`regularized` 管线耗时
+29.093 秒、静态初始化 12.647 秒、采样峰值约 2.205 GiB。两次输出的 run/jump GIF 与 PNG
+精灵表 SHA-256 逐项完全一致，有效 pin 均为 16/16。
 
 ### 8.6 宿主侧开发环境（不走容器，直调管线）
 
@@ -552,7 +572,7 @@ pytest tests/ -v                                # pyproject.toml 已配置 pytho
 
 ## 9. 测试地图
 
-`tests/` 共 **63 个用例**：62 个服务层回归 + 1 个尖刺验收。
+测试持续扩展，实际数量以 `pytest --collect-only -q` 为准；以下列出角色链路的核心测试文件。
 
 | 文件 | 用例数 | 覆盖内容 | 外部依赖 |
 |---|---|---|---|
@@ -563,6 +583,7 @@ pytest tests/ -v                                # pyproject.toml 已配置 pytho
 | `test_character_worker.py` | 6 | done→ready、崩溃重试后 `RENDER_CRASHED`、超时后重试成功不留 failed 中间态、业务终态不重试、result.json 损坏按基础设施故障重试、产物搬运 | 无（runner 注入） |
 | `test_render_runner.py` | 2 | 早期失败的 result.json 形状、maskUrl 含 jobId | 无 |
 | `test_render_scene_mesa_env.py` | 4 | `RENDER_USE_MESA` 各种取值、显式参数优先于环境变量 | 无 |
+| `test_arap_solver.py` | 4 | `regularized/vendor` 切换、非法值拒绝、非奇异系统保持上游求解路径、奇异系统输出有限值 | 无（合成矩阵） |
 | `test_sprite_sheet.py` | 3 | 透明 PNG 与元数据、footAnchor 在内容底部、单帧 GIF | 无（合成 GIF） |
 | `test_annotations.py` | 2 | 缺图 → NeedsCorrection、有效涂鸦产出 16 关节 | 后者需 TorchServe，否则 **skip** |
 | `test_character_pipeline_contract.py` | 3 | 非法输入 → needs_correction、ready 含契约字段、跨动作帧尺寸一致 | **需 TorchServe 在线** |

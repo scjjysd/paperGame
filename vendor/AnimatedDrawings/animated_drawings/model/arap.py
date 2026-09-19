@@ -6,12 +6,59 @@ import numpy as np
 import numpy.typing as npt
 from collections import defaultdict
 import logging
-from typing import List, Dict, Set, Tuple
+import os
+from typing import Callable, List, Dict, Set, Tuple
 import scipy.sparse.linalg as spla
 import scipy.sparse as sp
 
 
 csr_matrix = sp._csr.csr_matrix  # for typing  # pyright: ignore[reportPrivateUsage]
+
+
+# PAPER_GAME_PATCH_BEGIN: selectable normal-matrix stabilization.
+# Keep this block self-contained so updates from upstream AnimatedDrawings can
+# identify and reapply the project-owned behavior without diffing ARAP math.
+def _prepare_normal_system(
+        matrix: npt.NDArray[np.float32], label: str
+        ) -> Tuple[csr_matrix, Callable[[npt.NDArray[np.float64]], npt.NDArray[np.float64]]]:
+    mode = os.environ.get('RENDER_ARAP_SOLVER', 'regularized').strip().lower()
+    if mode not in ('regularized', 'vendor'):
+        raise ValueError(
+            'RENDER_ARAP_SOLVER must be regularized or vendor, got {!r}'.format(mode))
+
+    if mode == 'regularized':
+        regularization = 1e-8
+        # 先执行一次与上游完全相同的 float32 扰动：非零对角通常因 ULP 不变，
+        # 零对角则得到 1e-8。这保持既有画面，又省去昂贵 determinant。
+        matrix.flat[::matrix.shape[0] + 1] += np.float32(regularization)
+        sparse = sp.csr_matrix(matrix)
+        promoted = sparse.astype(np.float64)
+        try:
+            spla.splu(promoted.tocsc())
+            logging.info('ARAP 法方程后端：regularized，matrix=%s，'
+                         'float32_stabilization=1e-08，float64_fallback=false', label)
+            return sparse, lambda rhs: spla.spsolve(sparse, rhs)
+        except RuntimeError:
+            # float32 在常见非零对角值上无法表示 +1e-8，必须先提升精度，
+            # 否则名义上的正则项会被舍入掉，奇异矩阵仍会令 spsolve 返回 NaN。
+            stabilized = promoted + regularization * sp.eye(
+                matrix.shape[0], dtype=np.float64, format='csr')
+            logging.info('ARAP 法方程后端：regularized，matrix=%s，'
+                         'float32_stabilization=1e-08，float64_fallback=true，'
+                         'float64_regularization=%g', label, regularization)
+            stabilized = stabilized.tocsr()
+            return stabilized, lambda rhs: spla.spsolve(stabilized, rhs)
+
+    logging.info('ARAP 法方程后端：vendor，matrix=%s', label)
+    old_settings = np.seterr(over='ignore')
+    try:
+        while np.linalg.det(matrix) == 0.0:
+            logging.info('t%sx%s is singular. perturbing...', label, label)
+            matrix += np.float32(1e-8) * np.identity(matrix.shape[0], dtype=matrix.dtype)
+    finally:
+        np.seterr(**old_settings)
+    sparse = sp.csr_matrix(matrix)
+    return sparse, lambda rhs: spla.spsolve(sparse, rhs)
 
 
 class ARAP():
@@ -147,26 +194,12 @@ class ARAP():
         self.tA2: csr_matrix = sp.csr_matrix(self.A2.transpose())
         self.G: csr_matrix = sp.csr_matrix(G)
 
-        # perturbing singular matrix and calling det can trigger overflow warning- ignore it
-        old_settings = np.seterr(over='ignore')
-
-        # ensure tA1xA1 matrix isn't singular and cache sparse repsentation
+        # PAPER_GAME_PATCH: default to determinant-free sparse factorization; env flag preserves upstream fallback.
         tA1xA1_dense: npt.NDArray[np.float32] = self.tA1 @ self.A1
-        while np.linalg.det(tA1xA1_dense) == 0.0:
-            logging.info('tA1xA1 is singular. perturbing...')
-            tA1xA1_dense += 0.00000001 * np.identity(tA1xA1_dense.shape[0])
-        self.tA1xA1: csr_matrix = sp.csr_matrix(tA1xA1_dense)
+        self.tA1xA1, self._solve_A1 = _prepare_normal_system(tA1xA1_dense, 'A1')
 
-        # ensure tA2xA2 matrix isn't singular and cache sparse repsentation
         tA2xA2_dense: npt.NDArray[np.float32] = self.tA2 @ self.A2
-        while np.linalg.det(tA2xA2_dense) == 0.0:
-            logging.info('tA2xA2 is singular. perturbing...')
-            tA2xA2_dense += 0.00000001 * np.identity(tA2xA2_dense.shape[0])
-        self.tA2xA2: csr_matrix = sp.csr_matrix(tA2xA2_dense)
-
-        # revert np overflow warnings behavior
-        np.seterr(**old_settings)
-
+        self.tA2xA2, self._solve_A2 = _prepare_normal_system(tA2xA2_dense, 'A2')
     def solve(self, pins_xy_: npt.NDArray[np.float32]) -> npt.NDArray[np.float64]:
         """
         After ARAP has been initialized, pass in new pin xy positions and receive back the new mesh vertex positions
@@ -182,7 +215,7 @@ class ARAP():
         assert len(pins_xy) == self.pin_num
 
         self.b1: npt.NDArray[np.float64] = np.hstack([np.zeros([2 * self.edge_num], dtype=np.float64), self.w * pins_xy.reshape([-1, ])])
-        v1: npt.NDArray[np.float64] = spla.spsolve(self.tA1xA1, self.tA1 @ self.b1.T)
+        v1: npt.NDArray[np.float64] = self._solve_A1(self.tA1 @ self.b1.T)
 
         T1: npt.NDArray[np.float64] = self.G @ v1
         b2_top = np.empty([self.edge_num, 2], dtype=np.float64)
@@ -199,10 +232,11 @@ class ARAP():
         b2x = b2[:, 0]
         b2y = b2[:, 1]
 
-        v2x: npt.NDArray[np.float64] = spla.spsolve(self.tA2xA2, self.tA2 @ b2x)
-        v2y: npt.NDArray[np.float64] = spla.spsolve(self.tA2xA2, self.tA2 @ b2y)
+        v2x: npt.NDArray[np.float64] = self._solve_A2(self.tA2 @ b2x)
+        v2y: npt.NDArray[np.float64] = self._solve_A2(self.tA2 @ b2y)
 
         return np.vstack((v2x, v2y)).T
+# PAPER_GAME_PATCH_END
 
     def _xy_to_barycentric_coords(self,
                                   points: npt.NDArray[np.float32],

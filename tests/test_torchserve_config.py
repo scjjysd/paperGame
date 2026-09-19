@@ -56,3 +56,10 @@ def test_compose_invokes_readonly_entrypoint_through_shell():
     assert service['entrypoint'] == ['/bin/sh', '/torchserve-entrypoint.sh']
     assert service['environment']['TORCHSERVE_WORKERS_PER_MODEL'] == '${TORCHSERVE_WORKERS_PER_MODEL:-}'
     assert './docker/torchserve-entrypoint.sh:/torchserve-entrypoint.sh:ro' in service['volumes']
+
+
+def test_compose_enables_regularized_arap_with_vendor_fallback():
+    compose = yaml.safe_load((ROOT / 'docker-compose.yml').read_text())
+
+    assert compose['services']['worker']['environment']['RENDER_ARAP_SOLVER'] == (
+        '${RENDER_ARAP_SOLVER:-regularized}')

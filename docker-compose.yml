@@ -155,6 +155,8 @@ services:
       REDIS_URL: redis://redis:6379/0
       OUT_ROOT: /data/out
       RENDER_USE_MESA: "true"
+      # 项目 ARAP 补丁：regularized 跳过超大稠密 determinant；vendor 可一键回退上游行为。
+      RENDER_ARAP_SOLVER: ${RENDER_ARAP_SOLVER:-regularized}
       TORCHSERVE_UPSTREAM: torchserve:8080
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_KEEP_DAYS: ${LOG_KEEP_DAYS:-0}
