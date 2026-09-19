@@ -484,12 +484,13 @@ def repair_or_reject(anno_dir) -> Dict:
             if baseline['texture'].shape[:2] == (
                     plain_box['bottom'] - plain_box['top'],
                     plain_box['right'] - plain_box['left']):
-                plain_mask = rebuild_mask(baseline['texture'], baseline['mask'])
-                plain_offset, plain_joint = worst_joint_offset(plain_mask, skeleton)
-                plain = {'texture': baseline['texture'], 'mask': plain_mask,
-                         'skeleton': list(skeleton), 'box': plain_box,
-                         'loss': loss_in_image_frame(image, plain_box, plain_mask),
-                         'offset': plain_offset, 'joint': plain_joint}
+                with _timed_repair_stage(anno_dir, 'candidate.plain'):
+                    plain_mask = rebuild_mask(baseline['texture'], baseline['mask'])
+                    plain_offset, plain_joint = worst_joint_offset(plain_mask, skeleton)
+                    plain = {'texture': baseline['texture'], 'mask': plain_mask,
+                             'skeleton': list(skeleton), 'box': plain_box,
+                             'loss': loss_in_image_frame(image, plain_box, plain_mask),
+                             'offset': plain_offset, 'joint': plain_joint}
             else:
                 # repair_or_reject 可能被重复调用，此时磁盘产物已使用扩框尺寸，
                 # bounding_box.yaml 仍是旧框，不能把两套坐标强行当作同一候选。
@@ -513,7 +514,8 @@ def repair_or_reject(anno_dir) -> Dict:
             options.append((plain, 'plain'))
     else:
         # 缺 image.png / bounding_box.yaml（旧产物或人工构造）时退回只修 mask
-        repaired = _disk_candidate(anno_dir, skeleton, repair=True)
+        with _timed_repair_stage(anno_dir, 'candidate.plain'):
+            repaired = _disk_candidate(anno_dir, skeleton, repair=True)
         options.append((repaired, 'plain'))
 
     # 在候选里挑全图丢失率最低的，而不是按固定优先级取第一个：实测少数样本
@@ -537,9 +539,9 @@ def repair_or_reject(anno_dir) -> Dict:
     offset, joint = chosen['offset'], chosen['joint']
     with _timed_repair_stage(anno_dir, 'skeleton'):
         snapped, moved = project_joints_to_axis(chosen['skeleton'], chosen['mask'])
-    # 外推必须在吸附之后：吸附保证末端关节已落在 mask 内，才有可沿着走的起点。
-    # 放在门禁判定之前无害——门禁用的 offset 早在候选阶段（吸附前）算好。
-    snapped, extended = extend_limb_tips(snapped, chosen['mask'])
+        # 外推必须在吸附之后：吸附保证末端关节已落在 mask 内，才有可沿着走的起点。
+        # 放在门禁判定之前无害——门禁用的 offset 早在候选阶段（吸附前）算好。
+        snapped, extended = extend_limb_tips(snapped, chosen['mask'])
 
     # 先写回（含吸附后的骨架），再判门禁：确认页需要 mask 与 joints 互相一致
     height, width = chosen['mask'].shape[:2]
