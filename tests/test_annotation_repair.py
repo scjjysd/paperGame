@@ -1,5 +1,6 @@
 """annotation_repair 的关键断言：补回丢弃部件、保持单连通、关节吸附、扩框护栏、门禁时序。"""
 import cv2
+import logging
 import numpy as np
 import pytest
 import yaml
@@ -278,6 +279,44 @@ def test_clean_annotation_skips_mesh_candidate_checks(tmp_path, monkeypatch):
                         lambda *_: pytest.fail('clean annotation should skip mesh checks'))
     info = repair_or_reject(anno)
     assert info['crop'] == 'plain'
+
+
+def test_repair_logs_fast_path_stage_timings(tmp_path, caplog):
+    image = _drawing(halo=False)
+    anno = _write_anno(tmp_path, image, _body_only_mask(),
+                       _skeleton(neck_loc=(150, 200)))
+    cv2.imwrite(str(anno / 'image.png'), image)
+    (anno / 'bounding_box.yaml').write_text(yaml.safe_dump(
+        {'top': 0, 'bottom': SIZE, 'left': 0, 'right': SIZE}))
+
+    with caplog.at_level(logging.INFO):
+        repair_or_reject(anno)
+
+    stages = {record.message.split('stage=')[1].split()[0]
+              for record in caplog.records if '标注修复计时' in record.message}
+    assert {'baseline', 'clean_check', 'skeleton', 'write'} <= stages
+    assert not {'mesh.', 'candidate.'} & stages
+
+
+def test_repair_logs_only_executed_candidate_and_mesh_stages(tmp_path, caplog):
+    image = _drawing()
+    anno = _write_anno(tmp_path, image[190:340, 160:240],
+                       _body_only_mask()[190:340, 160:240],
+                       _skeleton(neck_loc=(40, 20), root_loc=(40, 120)))
+    cv2.imwrite(str(anno / 'image.png'), image)
+    (anno / 'bounding_box.yaml').write_text(yaml.safe_dump(
+        {'top': 190, 'bottom': 340, 'left': 160, 'right': 240}))
+
+    with caplog.at_level(logging.INFO):
+        with pytest.raises(NeedsCorrection):
+            repair_or_reject(anno)
+
+    stages = {record.message.split('stage=')[1].split()[0]
+              for record in caplog.records if '标注修复计时' in record.message}
+    assert {'candidate.plain', 'candidate.ink', 'candidate.pad',
+            'mesh.baseline'} <= stages
+    assert any(stage.startswith('mesh.') and stage != 'mesh.baseline'
+               for stage in stages)
 
 
 def test_padding_recovers_ink_clipped_by_detector_box(tmp_path):
