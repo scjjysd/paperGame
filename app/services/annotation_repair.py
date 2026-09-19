@@ -16,11 +16,11 @@ vendor 的标注产物有四类缺陷，本模块逐一对治（编号沿用 doc
 门禁：吸附前若仍有关节远离角色，说明 pose 估计本身不可信，抛 NeedsCorrection 走
 契约已有的 needs_correction 通道（返回 mask + 吸附后的关节给骨架确认页）。
 """
+from contextlib import contextmanager
+import logging
 import math
 import os
-import logging
 import time
-from contextlib import contextmanager
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 

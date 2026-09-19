@@ -368,7 +368,7 @@ def test_repair_times_repaired_plain_without_image_or_bbox(tmp_path, caplog):
     assert 'candidate.plain' in stages
 
 
-def test_repair_logs_only_executed_candidate_and_mesh_stages(tmp_path, caplog):
+def test_repair_logs_only_executed_candidate_and_mesh_stages(tmp_path, caplog, monkeypatch):
     image = _drawing()
     anno = _write_anno(tmp_path, image[190:340, 160:240],
                        _body_only_mask()[190:340, 160:240],
@@ -377,16 +377,50 @@ def test_repair_logs_only_executed_candidate_and_mesh_stages(tmp_path, caplog):
     (anno / 'bounding_box.yaml').write_text(yaml.safe_dump(
         {'top': 190, 'bottom': 340, 'left': 160, 'right': 240}))
 
+    active = []
+    candidate_calls = []
+    mesh_calls = []
+    original_candidate = annotation_repair._candidate
+    original_stage = annotation_repair._timed_repair_stage
+
+    @contextmanager
+    def tracking_stage(anno_dir, stage):
+        with original_stage(anno_dir, stage):
+            active.append(stage)
+            try:
+                yield
+            finally:
+                active.pop()
+
+    def tracked_candidate(*args, **kwargs):
+        candidate_calls.append((kwargs.get('ref_box'), tuple(active)))
+        return original_candidate(*args, **kwargs)
+
+    def tracked_mesh_unreachable(mask):
+        mesh_calls.append(tuple(active))
+        # 保持现有候选构造路径，令按墨迹扩框候选通过后停止 next()。
+        return 0
+
+    monkeypatch.setattr(annotation_repair, '_timed_repair_stage', tracking_stage)
+    monkeypatch.setattr(annotation_repair, '_candidate', tracked_candidate)
+    monkeypatch.setattr(annotation_repair, 'mesh_unreachable', tracked_mesh_unreachable)
+
     with caplog.at_level(logging.INFO):
-        with pytest.raises(NeedsCorrection):
-            repair_or_reject(anno)
+        repair_or_reject(anno)
 
     stages = {record.message.split('stage=')[1].split()[0]
               for record in caplog.records if '标注修复计时' in record.message}
+    assert candidate_calls == [(None, ('candidate.plain',)),
+                               ({'top': 190, 'bottom': 340, 'left': 160, 'right': 240},
+                                ('candidate.ink',)),
+                               ({'top': 190, 'bottom': 340, 'left': 160, 'right': 240},
+                                ('candidate.pad',))]
+    assert mesh_calls == [('mesh.baseline',), ('mesh.ink',)]
     assert {'candidate.plain', 'candidate.ink', 'candidate.pad',
-            'mesh.baseline'} <= stages
-    assert any(stage.startswith('mesh.') and stage != 'mesh.baseline'
-               for stage in stages)
+            'mesh.baseline', 'mesh.ink'} <= stages
+    assert not {'mesh.pad', 'mesh.plain'} & stages
+    assert {stage for stage in stages if stage.startswith('mesh.')} == {
+        stage for (stage,) in mesh_calls}
 
 
 def test_padding_recovers_ink_clipped_by_detector_box(tmp_path):
