@@ -72,7 +72,7 @@ def test_logged_animated_drawing_logs_dropped_pin_after_arap_construction(caplog
             }
             events.append('mesh.generated')
 
-    Drawing = render_scene._logged_animated_drawing_class(FakeBase)
+    Drawing = render_scene._logged_animated_drawing_class(FakeBase, 'run/jump')
     Drawing()
 
     messages = [record.getMessage() for record in caplog.records]
@@ -94,6 +94,7 @@ def test_logged_animated_drawing_logs_dropped_pin_after_arap_construction(caplog
     assert 'A2.shape=(1, 2)' in messages[actual_index]
     assert 'A2.nbytes=8' in messages[actual_index]
     dropped_pin_message = next(message for message in messages if 'dropped=1/2' in message)
+    assert 'actions=run/jump' in dropped_pin_message
     assert 'b' in dropped_pin_message
     assert 'normalized_loc=[0.75, 0.5]' in dropped_pin_message
 
@@ -108,13 +109,14 @@ def test_logged_animated_drawing_warns_without_breaking_when_pin_diagnostics_fie
                                         A1=np.zeros((1, 1), dtype=np.float32),
                                         A2=np.zeros((1, 1), dtype=np.float32))
 
-    Drawing = render_scene._logged_animated_drawing_class(FakeBase)
+    Drawing = render_scene._logged_animated_drawing_class(FakeBase, 'run/jump')
 
     Drawing()
 
     messages = [record.getMessage() for record in caplog.records]
     assert len(messages) == 1
     assert '丢失 pin 诊断失败' in messages[0]
+    assert 'actions=run/jump' in messages[0]
 
 
 @pytest.mark.parametrize('pin_mask', [np.array([True]), np.array([True, False, True])])
@@ -130,11 +132,12 @@ def test_log_dropped_pins_warns_and_skips_incomplete_diagnosis_on_mask_length_mi
         arap=SimpleNamespace(pin_mask=pin_mask),
     )
 
-    render_scene._log_dropped_pins(drawing)
+    render_scene._log_dropped_pins(drawing, 'run/jump')
 
     messages = [record.getMessage() for record in caplog.records]
     assert len(messages) == 1
     assert 'pin_mask/skeleton 长度不一致' in messages[0]
+    assert 'actions=run/jump' in messages[0]
     assert 'dropped=' not in messages[0]
 
 

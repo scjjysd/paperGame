@@ -115,11 +115,12 @@ def analyze(img_path, out_dir) -> Dict:
     img_path, out_dir = Path(img_path), Path(out_dir)
     if not img_path.exists():
         raise NeedsCorrection('NO_HUMANOID', f'input image not found: {img_path}')
+    timeout_seconds = _analysis_timeout_seconds()
 
     from image_to_annotations import image_to_annotations  # noqa: E402
 
     try:
-        with _analysis_deadline(_analysis_timeout_seconds()):
+        with _analysis_deadline(timeout_seconds):
             image_to_annotations(str(img_path), str(out_dir))
     except AnalysisTimeout:
         raise

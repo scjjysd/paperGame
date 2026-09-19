@@ -65,6 +65,23 @@ def test_analyze_timeout_is_not_needs_correction(tmp_path, monkeypatch):
     assert not isinstance(exc_info.value, NeedsCorrection)
 
 
+def test_analyze_invalid_timeout_propagates_value_error_without_calling_vendor(tmp_path, monkeypatch):
+    """若把配置解析放回宽泛异常处理，配置错误会被误报为用户图像问题。"""
+    image = tmp_path / 'input.png'
+    image.write_bytes(b'png')
+    calls = []
+    monkeypatch.setenv('ANALYZE_TIMEOUT_SECONDS', 'not-a-number')
+
+    def vendor(img_path, out_dir):
+        calls.append((img_path, out_dir))
+
+    _install_vendor(monkeypatch, vendor)
+
+    with pytest.raises(ValueError, match='ANALYZE_TIMEOUT_SECONDS'):
+        annotations.analyze(image, tmp_path / 'anno')
+    assert calls == []
+
+
 @pytest.mark.parametrize('value', ['0', '-1', 'abc', 'nan', 'inf'])
 def test_invalid_analysis_timeout_is_rejected(value, monkeypatch):
     """删掉正数校验会让无效环境配置静默进入分析调用。"""

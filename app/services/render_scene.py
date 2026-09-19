@@ -120,23 +120,24 @@ def _switch_motion(drawing, scene, motion_cfg, retarget_cfg) -> None:
     drawing.update()
 
 
-def _log_dropped_pins(drawing) -> None:
+def _log_dropped_pins(drawing, action_batch: str) -> None:
     """记录 vendor ARAP 未接受的 pin，坐标保持 vendor 提供的归一化值。"""
     try:
         skeleton = drawing.char_cfg.skeleton
         pin_mask = drawing.arap.pin_mask
         if len(pin_mask) != len(skeleton):
-            logger.warning('ARAP 丢失 pin 诊断失败：pin_mask/skeleton 长度不一致：'
-                           'pin_mask=%d，skeleton=%d', len(pin_mask), len(skeleton))
+            logger.warning('ARAP 丢失 pin 诊断失败：actions=%s，pin_mask/skeleton 长度不一致：'
+                           'pin_mask=%d，skeleton=%d', action_batch, len(pin_mask), len(skeleton))
             return
         dropped = [(joint['name'], joint['loc']) for joint, is_pinned in zip(skeleton, pin_mask)
                    if not is_pinned]
         if dropped:
             details = ', '.join('%s normalized_loc=%s' % (name, loc)
                                 for name, loc in dropped)
-            logger.warning('ARAP 丢失 pin：dropped=%d/%d，%s', len(dropped), len(skeleton), details)
+            logger.warning('ARAP 丢失 pin：actions=%s，dropped=%d/%d，%s',
+                           action_batch, len(dropped), len(skeleton), details)
     except (AttributeError, KeyError, TypeError, ValueError) as error:
-        logger.warning('ARAP 丢失 pin 诊断失败：%s', error)
+        logger.warning('ARAP 丢失 pin 诊断失败：actions=%s，%s', action_batch, error)
 
 
 def _gif_frame_count(path: Path) -> int:
@@ -145,7 +146,7 @@ def _gif_frame_count(path: Path) -> int:
         return gif.n_frames
 
 
-def _logged_animated_drawing_class(animated_drawing):
+def _logged_animated_drawing_class(animated_drawing, action_batch: str):
     """以运行时子类替代 vendor monkeypatch，保留项目层扩展点。"""
     class _LoggedAnimatedDrawing(animated_drawing):
         def _generate_mesh(self) -> None:
@@ -168,7 +169,7 @@ def _logged_animated_drawing_class(animated_drawing):
                         'A2.shape=%s，A2.nbytes=%d',
                         self.arap.pin_num, self.arap.A1.shape, self.arap.A1.nbytes,
                         self.arap.A2.shape, self.arap.A2.nbytes)
-            _log_dropped_pins(self)
+            _log_dropped_pins(self, action_batch)
     return _LoggedAnimatedDrawing
 
 
@@ -260,7 +261,8 @@ def render_animations(char_anno_dir, motions: Sequence[MotionRender], use_mesa=N
         AnimatedDrawing, Scene, VideoRenderController = _load_render_components()
         scene = Scene(configs[0].scene)
 
-        LoggedAnimatedDrawing = _logged_animated_drawing_class(AnimatedDrawing)
+        action_batch = '/'.join(name for name, _, _ in items)
+        LoggedAnimatedDrawing = _logged_animated_drawing_class(AnimatedDrawing, action_batch)
         first_name = items[0][0]
         static_init_started = time.perf_counter()
         with _timed_render_stage('static_scene_init', first_name):
