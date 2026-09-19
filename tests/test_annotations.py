@@ -127,3 +127,92 @@ def test_analysis_deadline_with_unsupported_signal_warns_and_completes(tmp_path,
     result = annotations.analyze(image, tmp_path / 'anno')
     assert result == {'skeleton_len': 0, 'height': 1, 'width': 1}
     assert '总超时未启用' in caplog.text
+
+
+def test_analysis_deadline_rearms_expired_one_shot_timer_after_restoring_handler(monkeypatch):
+    """若把到期旧 timer 以零延迟恢复，会取消调用方本应收到的 SIGALRM。"""
+    calls = []
+    handlers = []
+    fired = []
+
+    def old_handler(signum, frame):
+        fired.append((signum, frame))
+
+    current_handler = old_handler
+
+    def fake_signal(signum, handler):
+        nonlocal current_handler
+        handlers.append(handler)
+        current_handler = handler
+
+    def fake_setitimer(which, delay, interval=0.0):
+        calls.append((which, delay, interval))
+
+    monkeypatch.setattr(annotations, '_supports_analysis_deadline', lambda: True)
+    monkeypatch.setattr(annotations.signal, 'getsignal', lambda signum: old_handler)
+    monkeypatch.setattr(annotations.signal, 'getitimer', lambda which: (2.0, 0.0))
+    monkeypatch.setattr(annotations.signal, 'signal', fake_signal)
+    monkeypatch.setattr(annotations.signal, 'setitimer', fake_setitimer)
+    monkeypatch.setattr(annotations.time, 'monotonic', lambda: 100.0 if not calls else 105.0)
+
+    with annotations._analysis_deadline(30.0):
+        pass
+
+    assert handlers[-1] is old_handler
+    assert calls[-1] == (signal.ITIMER_REAL, 1e-6, 0.0)
+    current_handler(signal.SIGALRM, None)
+    assert fired == [(signal.SIGALRM, None)]
+
+
+def test_analysis_deadline_preserves_next_periodic_timer_phase(monkeypatch):
+    """若旧周期 timer 已越过多个周期，恢复时必须对齐下一个正相位。"""
+    calls = []
+    old_handler = object()
+    times = iter((100.0, 105.3))
+
+    monkeypatch.setattr(annotations, '_supports_analysis_deadline', lambda: True)
+    monkeypatch.setattr(annotations.signal, 'getsignal', lambda signum: old_handler)
+    monkeypatch.setattr(annotations.signal, 'getitimer', lambda which: (2.0, 3.0))
+    monkeypatch.setattr(annotations.signal, 'signal', lambda signum, handler: None)
+    monkeypatch.setattr(annotations.signal, 'setitimer',
+                        lambda which, delay, interval=0.0: calls.append((which, delay, interval)))
+    monkeypatch.setattr(annotations.time, 'monotonic', lambda: next(times))
+
+    with annotations._analysis_deadline(30.0):
+        pass
+
+    which, delay, interval = calls[-1]
+    assert which == signal.ITIMER_REAL
+    assert delay == pytest.approx(2.7)
+    assert interval == 3.0
+
+
+def test_analysis_deadline_rolls_back_handler_when_timer_installation_fails(monkeypatch):
+    """若首次 setitimer 安装失败，替换的 SIGALRM handler 不得泄漏给调用方。"""
+    calls = []
+    old_handler = object()
+    current_handler = old_handler
+
+    def fake_signal(signum, handler):
+        nonlocal current_handler
+        current_handler = handler
+
+    def fake_setitimer(which, delay, interval=0.0):
+        calls.append((which, delay, interval))
+        if delay == 30.0:
+            raise OSError('timer unavailable')
+
+    monkeypatch.setattr(annotations, '_supports_analysis_deadline', lambda: True)
+    monkeypatch.setattr(annotations.signal, 'getsignal', lambda signum: old_handler)
+    monkeypatch.setattr(annotations.signal, 'getitimer', lambda which: (9.0, 4.0))
+    monkeypatch.setattr(annotations.signal, 'signal', fake_signal)
+    monkeypatch.setattr(annotations.signal, 'setitimer', fake_setitimer)
+    times = iter((100.0, 100.0))
+    monkeypatch.setattr(annotations.time, 'monotonic', lambda: next(times))
+
+    with pytest.raises(OSError, match='timer unavailable'):
+        with annotations._analysis_deadline(30.0):
+            pass
+
+    assert current_handler is old_handler
+    assert calls[-2:] == [(signal.ITIMER_REAL, 0, 0.0), (signal.ITIMER_REAL, 9.0, 4.0)]

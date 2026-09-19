@@ -75,16 +75,33 @@ def _analysis_deadline(seconds: float):
     def on_timeout(signum, frame):
         raise AnalysisTimeout('image analysis exceeded {:.3f} seconds'.format(seconds))
 
-    signal.signal(signal.SIGALRM, on_timeout)
-    signal.setitimer(signal.ITIMER_REAL, seconds)
+    handler_install_attempted = False
     try:
+        handler_install_attempted = True
+        signal.signal(signal.SIGALRM, on_timeout)
+        signal.setitimer(signal.ITIMER_REAL, seconds)
         yield
     finally:
-        # 先取消本调用的 deadline；旧 timer 在本段执行期间暂停，恢复时扣除经过时间。
-        signal.setitimer(signal.ITIMER_REAL, 0)
-        signal.signal(signal.SIGALRM, old_handler)
-        remaining_delay = max(0.0, old_delay - (time.monotonic() - started))
-        signal.setitimer(signal.ITIMER_REAL, remaining_delay, old_interval)
+        if handler_install_attempted:
+            # 即使首次安装 timer 失败，也要撤销可能已经替换的 handler/timer。
+            try:
+                signal.setitimer(signal.ITIMER_REAL, 0)
+            finally:
+                try:
+                    signal.signal(signal.SIGALRM, old_handler)
+                finally:
+                    elapsed = time.monotonic() - started
+                    if old_delay > elapsed:
+                        remaining_delay = old_delay - elapsed
+                    elif old_interval > 0:
+                        periods_elapsed = math.floor((elapsed - old_delay) / old_interval) + 1
+                        remaining_delay = old_delay + periods_elapsed * old_interval - elapsed
+                    elif old_delay > 0:
+                        # 零会取消 timer；用极小正数让内核向已恢复的 handler 投递信号。
+                        remaining_delay = 1e-6
+                    else:
+                        remaining_delay = 0.0
+                    signal.setitimer(signal.ITIMER_REAL, remaining_delay, old_interval)
 
 
 def _classify(msg: str) -> str:
