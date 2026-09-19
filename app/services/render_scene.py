@@ -125,6 +125,10 @@ def _log_dropped_pins(drawing) -> None:
     try:
         skeleton = drawing.char_cfg.skeleton
         pin_mask = drawing.arap.pin_mask
+        if len(pin_mask) != len(skeleton):
+            logger.warning('ARAP 丢失 pin 诊断失败：pin_mask/skeleton 长度不一致：'
+                           'pin_mask=%d，skeleton=%d', len(pin_mask), len(skeleton))
+            return
         dropped = [(joint['name'], joint['loc']) for joint, is_pinned in zip(skeleton, pin_mask)
                    if not is_pinned]
         if dropped:

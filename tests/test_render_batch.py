@@ -117,6 +117,27 @@ def test_logged_animated_drawing_warns_without_breaking_when_pin_diagnostics_fie
     assert '丢失 pin 诊断失败' in messages[0]
 
 
+@pytest.mark.parametrize('pin_mask', [np.array([True]), np.array([True, False, True])])
+def test_log_dropped_pins_warns_and_skips_incomplete_diagnosis_on_mask_length_mismatch(
+        caplog, pin_mask):
+    """zip 截断会把不完整的比较误报成完整的丢 pin 结论。"""
+    caplog.set_level(logging.WARNING, logger=render_scene.__name__)
+    drawing = SimpleNamespace(
+        char_cfg=SimpleNamespace(skeleton=[
+            {'name': 'root', 'loc': [0.25, 0.5]},
+            {'name': 'hand', 'loc': [0.75, 0.5]},
+        ]),
+        arap=SimpleNamespace(pin_mask=pin_mask),
+    )
+
+    render_scene._log_dropped_pins(drawing)
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert len(messages) == 1
+    assert 'pin_mask/skeleton 长度不一致' in messages[0]
+    assert 'dropped=' not in messages[0]
+
+
 def test_render_animations_rejects_empty_motion_list(tmp_path):
     """空批次若继续进入 vendor 初始化，会创建无意义的 OpenGL 资源。"""
     with pytest.raises(ValueError, match='至少一个动作'):
@@ -149,7 +170,7 @@ def test_render_animations_validates_inputs_before_checking_vendor_assets(tmp_pa
 
 def _install_lifecycle_fakes(monkeypatch, events, fail_action=None, omit_output=False,
                              render_error=None, writer_cleanup_error=None, declared_frames=1,
-                             frames_rendered=1, gif_frames=1):
+                             frames_rendered=1, writer_frame_colors=None):
     """替代缓慢的 OpenGL/vendor 边界，保留批量编排本身的所有真实调用。"""
     configs = []
 
@@ -242,8 +263,11 @@ def _install_lifecycle_fakes(monkeypatch, events, fail_action=None, omit_output=
                     raise render_error('original render failure')
                 raise RuntimeError('render failed: %s' % fail_action)
             if not omit_output:
-                frames = [Image.new('RGBA', (2, 2), (index, 0, 0, 255))
-                          for index in range(gif_frames)]
+                colors = (writer_frame_colors if writer_frame_colors is not None
+                          else list(range(frames_rendered)))
+                events.append(('writer.submit_frames', self.cfg.name, len(colors)))
+                frames = [Image.new('RGBA', (2, 2), (color, 0, 0, 255))
+                          for color in colors]
                 frames[0].save(self.cfg.output_video_path, save_all=True,
                                append_images=frames[1:], format='GIF', loop=0)
             events.append(('render.end', self.cfg.name))
@@ -456,7 +480,7 @@ def test_render_animations_logs_matching_declared_rendered_and_gif_frame_counts(
     """三方帧数一致时应留下可审计的正常渲染诊断。"""
     caplog.set_level(logging.INFO, logger=render_scene.__name__)
     _install_lifecycle_fakes(monkeypatch, [], declared_frames=2, frames_rendered=2,
-                             gif_frames=2)
+                             writer_frame_colors=[0, 1])
 
     render_scene.render_animations(tmp_path, [_motions(tmp_path)[0]])
 
@@ -468,10 +492,12 @@ def test_render_animations_frame_count_warns_when_gif_encoder_merges_repeated_fr
                                                                                       monkeypatch, caplog):
     """编码器丢帧不能被 controller 已渲染帧数掩盖。"""
     caplog.set_level(logging.WARNING, logger=render_scene.__name__)
-    _install_lifecycle_fakes(monkeypatch, [], declared_frames=8, frames_rendered=8,
-                             gif_frames=7)
+    events = []
+    _install_lifecycle_fakes(monkeypatch, events, declared_frames=8, frames_rendered=8,
+                             writer_frame_colors=[0, 1, 2, 3, 3, 4, 5, 6])
 
     render_scene.render_animations(tmp_path, [_motions(tmp_path)[0]])
 
+    assert ('writer.submit_frames', 'run', 8) in events
     assert '声明=8，渲染=8，GIF=7' in caplog.text
     assert '编码器可能合并连续重复帧' in caplog.text
