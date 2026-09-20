@@ -1,7 +1,7 @@
 """OpenCV platform/goal candidate detection for v1 level parsing.
 
 Thresholds were calibrated against the fixed synthetic set and testdata/levels/golden/level1-background.png;
-recalibrate after adding real photos. ponytail: v1 handles near-horizontal straight platforms;
+recalibrate after adding real photos. ponytail: v1 handles straight platforms at any slope;
 curves should move to a contour-polyline model.
 """
 from __future__ import annotations
@@ -15,6 +15,14 @@ from app.services.level_markers import detect_markers
 from app.services.level_shape_rectangles import ShapeEvidence, shape_rectangles
 
 logger = logging.getLogger(__name__)
+
+# 坡与墙的倾角分界：|θ| <= 60° 一律识别为「坡」（哪怕陡到爬不上去，客户端会让人物滑下来），
+# 更陡的交给 _walls 当竖障碍。两个分支必须严格互补，否则同一段墨迹会被同时判成坡和墙。
+MAX_PLATFORM_SLOPE_DEGREES = 60.0
+MAX_WALL_TILT_DEGREES = 30.0
+
+# 细长比门限：中心线长度 / 法向厚度。外接框宽高比会随倾角天然变小，不能用作判据。
+MIN_LINE_ELONGATION = 4.5
 
 @dataclass(frozen=True)
 class PointCandidate:
@@ -87,6 +95,7 @@ def _red_mask(image: np.ndarray) -> np.ndarray:
 
 
 def _raw_lines(mask: np.ndarray):
+    """霍夫候选路。当前 detect() 未调用（平台只走形态学路），保留并在改判据时保持同步。"""
     h, w = mask.shape
     short = min(h, w)
     edges = cv2.Canny(mask, 40, 120)
@@ -102,7 +111,8 @@ def _raw_lines(mask: np.ndarray):
         angle = float(np.degrees(np.arctan2(dy, dx)))
         if dx < 0:
             x1, y1, x2, y2, angle = x2, y2, x1, y1, -angle
-        if length < max(45, short * .09) or abs(angle) > 6 or min(y1, y2) <= max(25, int(h * .15)) or max(y1, y2) >= h - 7:
+        if (length < max(45, short * .09) or abs(angle) > MAX_PLATFORM_SLOPE_DEGREES
+                or min(y1, y2) <= max(25, int(h * .15)) or max(y1, y2) >= h - 7):
             continue
         xs = np.linspace(x1, x2, max(2, int(length))).round().astype(int)
         ys = np.linspace(y1, y2, max(2, int(length))).round().astype(int)
@@ -376,8 +386,7 @@ def _platforms(ink, red, image, marker_regions=(), block_regions=()):
     for label in range(1, n):
         x, y, width, height, area = map(int, stats[label])
         minimum = max(55, int(min(h, w) * .10))
-        maximum_height = max(35, int(h * .045), int(width * .12) + 12)
-        if width < minimum or height > maximum_height:
+        if width < minimum:
             continue
         if y < max(25, int(h * .15)) or x <= 5 or (x + width >= w - 5 and y < int(h * .20)):
             continue
@@ -385,12 +394,22 @@ def _platforms(ink, red, image, marker_regions=(), block_regions=()):
         points = np.column_stack((xs.astype(np.float32), ys.astype(np.float32)))
         vx, vy, x0, y0 = cv2.fitLine(points, cv2.DIST_L2, 0, .01, .01).reshape(-1)
         angle = float(np.degrees(np.arctan2(vy, vx)))
-        if abs(angle) > 6:
+        if abs(angle) > MAX_PLATFORM_SLOPE_DEGREES:
             continue
         unit = np.array([float(vx), float(vy)])
         origin = np.array([float(x0), float(y0)])
         projections = (points - origin) @ unit
         center_a, center_b, centerline_length = _centerline_segment(points, origin, unit)
+        # 笔宽估计 = 面积 / 中心线长度：任意倾角的直线都等于笔画粗细。
+        # 不能用「法向跨度」——直线时它等于厚度，折线时却等于整条折线的高度，门限会失效。
+        pen_width = area / max(1.0, centerline_length)
+        # 外接框高度的门限必须按实测倾角折算：斜线的 bbox 高度本来就该接近 width*tan(θ)，
+        # 只有超出「倾角本身 + 笔画粗细」的部分才是真正的厚重墨块（折线、阴影、纸纹）。
+        maximum_height = max(35, int(h * .045),
+                             int(width * abs(np.tan(np.radians(angle))))
+                             + int(3 * pen_width) + 12)
+        if height > maximum_height:
+            continue
         # 形态学条带的端点带有半个笔画宽度，内缩后得到中心线端点。
         half_width = 1.0
         lo, hi = float(projections.min()) + half_width, float(projections.max()) - half_width
@@ -408,7 +427,7 @@ def _platforms(ink, red, image, marker_regions=(), block_regions=()):
                     or min(center_a[1], center_b[1]) < safe_margin
                     or max(center_a[1], center_b[1]) >= h - safe_margin):
                 continue
-            aspect_ratio = width / max(1, height)
+            elongation = centerline_length / max(1.0, pen_width)
             samples = max(2, int(centerline_length))
             sample_x = np.clip(np.rint(np.linspace(center_a[0], center_b[0], samples)).astype(int), 0, w - 1)
             sample_y = np.clip(np.rint(np.linspace(center_a[1], center_b[1], samples)).astype(int), 0, h - 1)
@@ -416,7 +435,7 @@ def _platforms(ink, red, image, marker_regions=(), block_regions=()):
                 (gray[max(0, y_value - 4):min(h, y_value + 5), x_value] < 100).any()
                 for x_value, y_value in zip(sample_x, sample_y)
             ])
-            if aspect_ratio < 4.5 or continuity < .70:
+            if elongation < MIN_LINE_ELONGATION or continuity < .70:
                 continue
         if not _is_line_allowed(a, b, marker_regions, block_regions):
             continue
@@ -459,9 +478,8 @@ def _walls(ink, image, marker_regions=(), block_regions=()):
     minimum = max(55, int(min(h, w) * .10))
     found = []
     for label in range(1, n):
-        x, y, width, height, _ = map(int, stats[label])
-        maximum_width = max(35, int(w * .045), int(height * .12) + 12)
-        if height < minimum or width > maximum_width:
+        x, y, width, height, area = map(int, stats[label])
+        if height < minimum:
             continue
         if y < max(25, int(h * .15)) or x <= 5 or x + width >= w - 5 or y + height >= h - 7:
             continue
@@ -469,12 +487,20 @@ def _walls(ink, image, marker_regions=(), block_regions=()):
         points = np.column_stack((xs.astype(np.float32), ys.astype(np.float32)))
         vx, vy, x0, y0 = cv2.fitLine(points, cv2.DIST_L2, 0, .01, .01).reshape(-1)
         angle = float(np.degrees(np.arctan2(vy, vx)))
-        if abs(abs(angle) - 90) > 6:
+        # 与 _platforms 严格互补：坡取 |θ| <= 60°，墙取 |θ| > 60°，同一段墨迹只会进一个分支。
+        if abs(abs(angle) - 90) >= MAX_WALL_TILT_DEGREES:
             continue
         unit = np.array([float(vx), float(vy)])
         origin = np.array([float(x0), float(y0)])
         projections = (points - origin) @ unit
         center_a, center_b, centerline_length = _centerline_segment(points, origin, unit)
+        pen_width = area / max(1.0, centerline_length)
+        # 与外接框高度同理：竖线的 bbox 宽度本来就该接近 height/tan(θ)，倾斜不能算厚重。
+        sine = max(1e-6, abs(np.sin(np.radians(angle))))
+        expected_width = int(height * abs(np.cos(np.radians(angle))) / sine) + int(3 * pen_width) + 12
+        maximum_width = max(35, int(w * .045), expected_width)
+        if width > maximum_width:
+            continue
         lo, hi = float(projections.min()) + 1., float(projections.max()) - 1.
         a, b = origin + lo * unit, origin + hi * unit
         length = float(np.hypot(*(b - a)))
@@ -487,7 +513,7 @@ def _walls(ink, image, marker_regions=(), block_regions=()):
                     or min(center_a[1], center_b[1]) < safe_margin
                     or max(center_a[1], center_b[1]) >= h - safe_margin):
                 continue
-            aspect_ratio = height / max(1, width)
+            elongation = centerline_length / max(1.0, pen_width)
             samples = max(2, int(centerline_length))
             sample_x = np.clip(np.rint(np.linspace(center_a[0], center_b[0], samples)).astype(int), 0, w - 1)
             sample_y = np.clip(np.rint(np.linspace(center_a[1], center_b[1], samples)).astype(int), 0, h - 1)
@@ -495,7 +521,7 @@ def _walls(ink, image, marker_regions=(), block_regions=()):
                 (gray[y_value, max(0, x_value - 4):min(w, x_value + 5)] < 100).any()
                 for x_value, y_value in zip(sample_x, sample_y)
             ])
-            if aspect_ratio < 4.5 or continuity < .70:
+            if elongation < MIN_LINE_ELONGATION or continuity < .70:
                 continue
         if not _is_line_allowed(a, b, marker_regions, block_regions):
             continue

@@ -1,9 +1,21 @@
 """在像素空间诊断关卡可玩性，不修改关卡几何。"""
 
+import math
 from collections import deque
 from typing import Dict, List, Optional, Tuple
 
 from app.level_contracts import Level, Platform, PlayabilityAnalysis, PlayabilityProfile, Warning
+
+
+def _slope_degrees(platform: Platform) -> float:
+    """平台相对水平线的倾角（度，y 轴向下为正）。端点存反时归一化为从左到右。"""
+    dx = platform.end.x - platform.start.x
+    dy = platform.end.y - platform.start.y
+    if dx < 0:
+        dx, dy = -dx, -dy
+    if dx == 0:
+        return 90.0 if dy > 0 else -90.0
+    return math.degrees(math.atan2(dy, dx))
 
 
 def _span(platform: Platform) -> Tuple[int, int]:
@@ -88,6 +100,17 @@ def analyze(level: Level, profile: PlayabilityProfile) -> PlayabilityAnalysis:
     if start is None:
         warnings.append(_warning('START_NOT_SUPPORTED', '出生点未被平台承载',
                                  [nearest_start.id], start_gap, tolerance))
+
+    # 超过可攀爬坡度的平台仍然是合法几何（角色可以落在上面并沿坡滑下），
+    # 所以只提示、不从可达图里剔除，避免把「滑梯」误判成不可玩。
+    for platform in platforms:
+        slope = abs(_slope_degrees(platform))
+        if slope > profile.maxClimbableSlopeDegrees:
+            warnings.append(_warning(
+                'SLOPE_TOO_STEEP',
+                '{0} 倾角 {1:.0f}° 超过可攀爬上限 {2:.0f}°，角色会沿坡滑下'.format(
+                    platform.id, slope, profile.maxClimbableSlopeDegrees),
+                [platform.id]))
 
     goal, goal_gap, nearest_goal = _goal_platform(level, tolerance)
     if goal is None:

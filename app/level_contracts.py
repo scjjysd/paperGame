@@ -189,6 +189,9 @@ class PlayabilityProfile(ContractModel):
     characterWidthPixels: int = Field(gt=0)
     characterHeightPixels: int = Field(gt=0)
     landingTolerancePixels: int = Field(ge=0)
+    # 角色能攀爬的最大坡度。由客户端上报（与 C1SlopePhysics.MaxClimbableSlopeDegrees 同源），
+    # 缺省 45° 以便旧客户端不带该字段时仍能通过校验。
+    maxClimbableSlopeDegrees: float = Field(default=45.0, gt=0, le=90)
 
 
 DEFAULT_PLAYABILITY_PROFILE = PlayabilityProfile(
@@ -198,6 +201,7 @@ DEFAULT_PLAYABILITY_PROFILE = PlayabilityProfile(
     characterWidthPixels=32,
     characterHeightPixels=58,
     landingTolerancePixels=6,
+    maxClimbableSlopeDegrees=45.0,
 )
 
 

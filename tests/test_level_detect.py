@@ -270,48 +270,81 @@ def test_vertical_minimum_length_uses_centerline_endpoints(
     assert len(result.wall_candidates) == expected_count
 
 
-@pytest.mark.parametrize('delta_y', [40, -40])
-def test_platform_at_six_degree_tolerance_is_detected(tmp_path, delta_y):
-    image = tmp_path / f'platform-six-{delta_y}.png'
-    _write_image(image, size=(900, 560),
-                 lines=[(180, 220, 561, 220 + delta_y, 7)])
+def _sloped_line(angle_degrees, length=330, center=(450, 280)):
+    """以画布中心为轴、按给定倾角（度，y 向下为正）生成一条直线。"""
+    radians = np.radians(angle_degrees)
+    half = length / 2
+    return (round(center[0] - half * np.cos(radians)), round(center[1] - half * np.sin(radians)),
+            round(center[0] + half * np.cos(radians)), round(center[1] + half * np.sin(radians)))
+
+
+@pytest.mark.parametrize('angle', [-59, -45, -30, -15, -6, 0, 6, 15, 30, 45, 59])
+def test_line_up_to_max_platform_slope_is_a_platform(tmp_path, angle):
+    """任意倾角到 60° 的直线都该识别成坡；孩子画歪、拍照倾斜都不影响。"""
+    image = tmp_path / f'slope-{angle}.png'
+    _write_image(image, size=(900, 560), lines=[(*_sloped_line(angle), 7)])
 
     result = detect(image, tmp_path)
 
     assert len(result.platform_candidates) == 1
+    assert result.wall_candidates == []
+    assert result.platform_candidates[0].angle_degrees == pytest.approx(angle, abs=1.5)
+    # 端点必须落在原始直线上（斜率正确比端点绝对误差更关键）。
+    candidate = result.platform_candidates[0]
+    radians = np.radians(angle)
+    for endpoint in (candidate.start, candidate.end):
+        offset = (endpoint.x - 450) * np.sin(radians) - (endpoint.y - 280) * np.cos(radians)
+        assert abs(offset) <= 3
 
 
-@pytest.mark.parametrize('delta_y', [41, -41])
-def test_platform_beyond_six_degree_tolerance_is_ignored(tmp_path, delta_y):
-    image = tmp_path / f'platform-over-six-{delta_y}.png'
-    _write_image(image, size=(900, 560),
-                 lines=[(180, 220, 561, 220 + delta_y, 7)])
+@pytest.mark.parametrize('angle', [-89, -75, -62, 62, 75, 89])
+def test_line_beyond_max_platform_slope_is_a_wall(tmp_path, angle):
+    """超过 60° 的线是竖障碍，不是坡。"""
+    image = tmp_path / f'wall-{angle}.png'
+    _write_image(image, size=(900, 560), lines=[(*_sloped_line(angle), 7)])
+
+    result = detect(image, tmp_path)
+
+    assert result.platform_candidates == []
+    assert len(result.wall_candidates) == 1
+
+
+@pytest.mark.parametrize('angle', [0, 12, 30, 45, 55, 59, 61, 70, 84, 90])
+def test_every_sloped_stroke_lands_in_exactly_one_bucket(tmp_path, angle):
+    """坡与墙的分支必须严格互补：同一段墨迹不能既是坡又是墙，也不能两边都不要。"""
+    image = tmp_path / f'bucket-{angle}.png'
+    _write_image(image, size=(900, 560), lines=[(*_sloped_line(angle), 7)])
+
+    result = detect(image, tmp_path)
+
+    total = len(result.platform_candidates) + len(result.wall_candidates)
+    assert total == 1, f'{angle}° 落进 {total} 个分支'
+    expected_platform = abs(angle) <= 60
+    assert bool(result.platform_candidates) is expected_platform
+
+
+def test_shallow_vee_is_not_a_platform(tmp_path):
+    """折线不是直线：外接框高度门限按倾角折算后仍须拦住浅 V 形。"""
+    image = tmp_path / 'shallow-vee.png'
+    _write_image(image, size=(900, 560), lines=[
+        (280, 250, 450, 300, 7),
+        (450, 300, 620, 250, 7),
+    ])
 
     result = detect(image, tmp_path)
 
     assert result.platform_candidates == []
 
 
-@pytest.mark.parametrize('delta_x', [40, -40])
-def test_wall_at_six_degree_tolerance_is_detected(tmp_path, delta_x):
-    image = tmp_path / f'wall-six-{delta_x}.png'
-    _write_image(image, size=(900, 560),
-                 lines=[(350, 120, 350 + delta_x, 501, 7)])
+def test_sloped_platform_height_budget_scales_with_angle(tmp_path):
+    """斜线的外接框本来就高，不能按水平线的高度预算把它剔除。"""
+    image = tmp_path / 'sloped-tall-box.png'
+    _write_image(image, size=(900, 560), lines=[(*_sloped_line(45, length=300), 7)])
 
     result = detect(image, tmp_path)
 
-    assert len(result.wall_candidates) == 1
-
-
-@pytest.mark.parametrize('delta_x', [41, -41])
-def test_wall_beyond_six_degree_tolerance_is_ignored(tmp_path, delta_x):
-    image = tmp_path / f'wall-over-six-{delta_x}.png'
-    _write_image(image, size=(900, 560),
-                 lines=[(350, 120, 350 + delta_x, 501, 7)])
-
-    result = detect(image, tmp_path)
-
-    assert result.wall_candidates == []
+    assert len(result.platform_candidates) == 1
+    assert result.platform_candidates[0].length >= 280
 
 
 def test_short_line_with_low_aspect_ratio_is_not_a_platform(tmp_path):

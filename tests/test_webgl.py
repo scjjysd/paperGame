@@ -71,6 +71,30 @@ def test_unityweb_is_left_for_loader_to_decompress(webgl_client):
     assert response.headers['content-type'] == 'application/octet-stream'
 
 
+def test_pre_compressed_assets_ignore_range_requests(webgl_client):
+    """压缩流的分片配上 Content-Encoding 浏览器解码不了，手机续传会拿到坏数据。"""
+    client, root = webgl_client
+    payload = b'\x00asm\x01\x00\x00\x00' * 64
+    (root / 'Build' / 'game.wasm.gz').write_bytes(gzip.compress(payload))
+    response = client.get('/webgl/Build/game.wasm.gz', headers={'Range': 'bytes=0-63'})
+    assert response.status_code == 200
+    assert response.content == payload
+    assert response.headers['content-encoding'] == 'gzip'
+    assert response.headers['content-type'] == 'application/wasm'
+    assert 'content-range' not in response.headers
+    assert 'accept-ranges' not in response.headers
+
+
+def test_plain_assets_keep_range_support(webgl_client):
+    """只有预压缩产物屏蔽分片，未压缩资源的分片能力不受影响。"""
+    client, root = webgl_client
+    (root / 'Build' / 'game.data').write_bytes(b'0123456789')
+    response = client.get('/webgl/Build/game.data', headers={'Range': 'bytes=0-3'})
+    assert response.status_code == 206
+    assert response.content == b'0123'
+    assert response.headers['content-range'] == 'bytes 0-3/10'
+
+
 def test_missing_assets_and_directory_escape_are_rejected(webgl_client):
     client, root = webgl_client
     (root.parent / 'private.txt').write_text('private')
