@@ -234,7 +234,7 @@ def _has_triangular_face(mask, pole_x, xs, ys, pole_length):
     return closure >= .55
 
 
-def _pole_flags(mask, circular_regions=()):
+def _pole_flags(mask):
     """从近竖直旗杆及其顶部单侧旗面识别实心或空心旗帜。"""
     short = min(mask.shape)
     lines = cv2.HoughLinesP(mask, 1, np.pi / 360,
@@ -244,9 +244,6 @@ def _pole_flags(mask, circular_regions=()):
     # 额外竖向视图去除横向干扰；候选仍通过原角度、长度、三角面与下伸验证。
     vertical = cv2.morphologyEx(mask, cv2.MORPH_OPEN,
                                 cv2.getStructuringElement(cv2.MORPH_RECT, (1, 9)))
-    # 已复核圆圈的侧弧不能在辅助视图里伪装成竖杆；原始主视图不变。
-    for x, y, width, height in circular_regions:
-        vertical[y:y + height, x:x + width] = 0
     vertical_lines = cv2.HoughLinesP(vertical, 1, np.pi / 360,
                                      threshold=max(12, short // 45),
                                      minLineLength=max(18, int(short * .035)), maxLineGap=6)
@@ -321,7 +318,9 @@ def detect_markers(image):
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
     contours, _ = cv2.findContours(mask, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
     circles = _hough_circles(gray, mask)
-    flags = _pole_flags(mask, circles)
+    # 霍夫圆只是待消歧候选，旗面也可能局部呈圆形；过早遮掉圆候选会连真实旗杆一起删除。
+    # 两类标记先独立收集，再由下方的包含关系和重叠率统一消歧。
+    flags = _pole_flags(mask)
     marker_floor = _minimum_marker_size(mask.shape)
     for contour in contours:
         area = abs(cv2.contourArea(contour))

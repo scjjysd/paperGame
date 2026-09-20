@@ -336,8 +336,7 @@ def parse(job_dir: Path, progress: Progress = None,
                  if rectified.width * .05 < goal.region.x + goal.region.width / 2
                  < rectified.width * .95
                  and rectified.height * .05 < goal.region.y + goal.region.height / 2
-                 < rectified.height * .95
-                 and goal.region.height <= rectified.height * .15]
+                 < rectified.height * .95]
         detection = replace(detection, start_candidates=starts, goal_candidates=goals)
     _stage(progress, 'detecting_goal')
     _stage(progress, 'semantic_review')

@@ -1,3 +1,4 @@
+import hashlib
 import io
 import json
 import threading
@@ -12,7 +13,8 @@ from PIL import Image, ImageFile
 from app.api.levels import LEVEL_RERUN_ARTIFACTS
 from app.api.urls import absolutize
 from app.level_contracts import (DEFAULT_PLAYABILITY_PROFILE, LEVEL_ERROR_MESSAGES,
-                                 LEVEL_STATUS_MESSAGES, LevelNeedsFix, derive_level_job_id)
+                                 LEVEL_STATUS_MESSAGES, LevelNeedsFix, canonical_profile_json,
+                                 derive_level_job_id)
 from app.services.job_store import JobStore
 
 BASE = 'http://testserver'
@@ -129,6 +131,24 @@ def test_same_image_same_profile_is_idempotent(client, png_800):
     second = upload(client, png_800, profile=profile).json()
     assert second['jobId'] == first['jobId']
     assert client.app.state.level_store.r.llen('pq:levels') == 1
+
+
+def test_marker_algorithm_revision_does_not_reuse_legacy_failure(client, png_800):
+    """标记识别修复后，同一图片不能继续命中旧算法留下的失败终态。"""
+    legacy_digest = hashlib.sha256(
+        png_800 + canonical_profile_json(DEFAULT_PLAYABILITY_PROFILE)
+        + b'1:explicit-markers-v4'
+    ).hexdigest()
+    legacy_job_id = 'level_' + legacy_digest[:12]
+    store = client.app.state.level_store
+    store.create(legacy_job_id)
+    store.set_status(legacy_job_id, 'failed', result={'status': 'failed'})
+
+    body = upload(client, png_800).json()
+
+    assert body['jobId'] != legacy_job_id
+    assert body['status'] == 'queued'
+    assert store.r.llen('pq:levels') == 1
 
 
 def test_idempotent_replay_after_redis_expiry_keeps_created_at(client, png_800):
