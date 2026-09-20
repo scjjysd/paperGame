@@ -174,15 +174,63 @@ def _inner_dot(mask, region, pad=3, min_ratio=.004, max_ratio=.10,
     return 1 <= qualified <= limit
 
 
-def _looks_like_pen_ink(image, mask, region):
-    """保留黑笔或深色彩笔，排除浅色高饱和度印刷 Logo/字母。"""
+# 笔迹相对纸面的最小局部对比度（灰阶）。实测手绘笔迹 61~168，纸纹/折痕/光照阴影
+# 只有 0~18，两者相差数倍，阈值取在空档中间。
+MIN_PEN_CONTRAST = 45
+
+
+def _contrast_map(image):
+    """每个像素相对周围背景的暗度（blackhat），用作「是不是笔迹」的判据。
+
+    纸张纹理、折痕和照片光照阴影与纸面只差几个灰阶，手绘笔迹差几十个灰阶。
+    用局部对比度而不是绝对灰度，才能不受纸面明暗和光照梯度影响——实测同一张
+    带网格且光照不均的照片里，真起点圆的绝对灰度中位数会随位置漂到 200 以上，
+    而局部对比度稳定在 80 左右。
+    """
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    return cv2.morphologyEx(gray, cv2.MORPH_BLACKHAT,
+                            cv2.getStructuringElement(cv2.MORPH_RECT, (31, 31)))
+
+
+def _looks_like_pen_ink(image, mask, region, contrast=None):
+    """保留黑笔或深色彩笔，排除浅色高饱和度印刷 Logo/字母与纸纹阴影。
+
+    局部对比度是必要条件：自适应阈值会把纸纹和阴影一起抠进墨迹遮罩，这些噪声
+    在饱和度上同样是低饱和（灰色），只靠下面的饱和度/灰度判据拦不住——实测
+    带网格纸的一次拍摄里，纸纹噪声凑出的伪起点圆对比度仅 16.5，而真圆为 80。
+    """
     x, y, w, h = region
     ink = mask[y:y + h, x:x + w] > 0
     if not ink.any():
         return False
+    if contrast is None:
+        contrast = _contrast_map(image)
+    if np.median(contrast[y:y + h, x:x + w][ink]) < MIN_PEN_CONTRAST:
+        return False
     gray = cv2.cvtColor(image[y:y + h, x:x + w], cv2.COLOR_BGR2GRAY)[ink]
     saturation = cv2.cvtColor(image[y:y + h, x:x + w], cv2.COLOR_BGR2HSV)[:, :, 1][ink]
     return np.percentile(saturation, 75) <= 80 or np.median(gray) < 85
+
+
+def _drop_border_background(mask, ratio=.01):
+    """剔除贴着画布边缘的大块深色区域——那是纸外背景，不是孩子的画。
+
+    拉正把纸张铺满画布，画布边缘朝外就是桌面；阈值化后它沿边缘形成一条面积可观
+    的连通带（实测 900×560 画布上 17972 像素、占 3.6%）。纸边这条黑带本身是竖直
+    长线，会被概率霍夫当成旗杆、再配上一侧墨迹凑出三角旗面（实测一次拍摄里 6 个
+    终点候选有 5 个来自纸边），也是伪圆的来源。真笔迹不会与它连通，除非画到纸的
+    最边缘——那本来也不可信。用「接触画布边缘＋面积超过画布 1%」双重条件，避免
+    误删恰好贴边的正常笔画。
+    """
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(
+        (mask > 0).astype(np.uint8), 8)
+    edges = np.concatenate((labels[0, :], labels[-1, :], labels[:, 0], labels[:, -1]))
+    touching = {int(value) for value in np.unique(edges) if value}
+    keep = np.ones(count, bool)
+    for label in range(1, count):
+        if label in touching and stats[label, cv2.CC_STAT_AREA] >= ratio * mask.size:
+            keep[label] = False
+    return np.where(keep[labels], mask, 0).astype(np.uint8)
 
 
 def _hough_circles(gray, mask):
@@ -310,12 +358,29 @@ def _overlap_ratio(first, second):
     return width * height / max(1, min(aw * ah, bw * bh))
 
 
+def _same_marker_shape(circle, flag, area_ratio=.5):
+    """圆候选与旗候选是否在描述**同一个物体**。
+
+    真旗帜会同时触发霍夫圆：旗面是实心三角形，而 `_looks_circular` 只考察各方向
+    到候选中心的距离一致性，实心区域每个方向都能命中半径附近，因此实心旗面必然
+    满足它。此时两个候选的外接框几乎重合（实测 0.87）。而圆圈侧弧凑出来的伪旗
+    只取到圆的一小段弧，框明显更小（面积比远低于 .5）。用面积比把「同一个物体」
+    与「物体的一部分」分开，前者判给旗帜——三角旗面验证（凸包三点＋下伸旗杆＋
+    单侧墨迹占优）比圆形判据严格得多，实心三角只能靠圆形判据蒙混过关。
+    """
+    if not _contains(circle, flag):
+        return False
+    return (flag[2] * flag[3]) / max(1, circle[2] * circle[3]) >= area_ratio
+
+
 def detect_markers(image):
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     mask = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
                                  cv2.THRESH_BINARY_INV, 31, 7)
     # 闭运算仅连接很小的笔画缺口；RETR_LIST 同时保留空心标记内轮廓。
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
+    # 纸外背景必须先剔除：它沿画布边缘成带状贴在纸边，是伪旗与伪圆的主要来源。
+    mask = _drop_border_background(mask)
     contours, _ = cv2.findContours(mask, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
     circles = _hough_circles(gray, mask)
     # 霍夫圆只是待消歧候选，旗面也可能局部呈圆形；过早遮掉圆候选会连真实旗杆一起删除。
@@ -336,6 +401,11 @@ def detect_markers(image):
                 and (_inner_dot(mask, region) or _looks_circular(mask, region))):
             circles.append(region)
     flags = [flag for flag in _distinct(flags) if flag[3] >= min(mask.shape) * .07]
+    # 局部对比度只跟候选所在区域有关，整图算一次供所有候选复用。
+    contrast = _contrast_map(image)
+    # 旗帜同样要过笔迹门禁：纸边暗影与折痕也能凑出「旗杆＋三角面」（实测一次拍摄里
+    # 6 个终点候选有 5 个是阴影，局部对比度 0~12，而真旗帜为 167）。
+    flags = [flag for flag in flags if _looks_like_pen_ink(image, mask, flag, contrast)]
     # 「圈中点」（方案 A）是唯一的正向判据，命中即无条件保留：它证明孩子明确标注了
     # 起点位置，因而不再受形状类判据约束——下方两个判据在「细圆 + 粗平台线」画法下
     # 都会误杀合法起点（实测 r=12/线粗14 与 r=14/线粗14 直接判成没有起点）。
@@ -345,6 +415,11 @@ def detect_markers(image):
     # 轮廓复核也拦不住，只有看空隙的整体形状才能区分（实测 AMBIGUOUS_START 根因）。
     verified = [circle for circle in distinct
                 if circle in dotted or not _inside_elongated_slot(mask, circle)]
+    # 与旗帜同框的圆必须是伪圆：实心三角旗面靠 `_looks_circular` 的半径一致性蒙混
+    # 过关，两个候选描述的是同一个物体，判给证据更强的旗帜（实测 phone.jpg 的起点
+    # 候选就是真旗面，导致 AMBIGUOUS_START）。
+    verified = [circle for circle in verified
+                if not any(_same_marker_shape(circle, flag) for flag in flags)]
     # 伪旗必须先按「整体落在圆圈框内」判废：否则下面的互斥规则会把真圆圈当成
     # 「与旗帜重叠的圆形噪声」删掉，只留下圆圈自己凑出来的假旗帜（实测 START_NOT_FOUND）。
     flags = [flag for flag in flags
@@ -352,5 +427,5 @@ def detect_markers(image):
     circles = [circle for circle in verified
                if (circle in dotted
                    or not any(_overlap_ratio(circle, flag) >= .25 for flag in flags))
-               and _looks_like_pen_ink(image, mask, circle)]
+               and _looks_like_pen_ink(image, mask, circle, contrast)]
     return circles, flags
