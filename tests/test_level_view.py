@@ -1,12 +1,15 @@
 """关卡审查视图：detail 收集 + 单页 HTML。纯逻辑，离线可跑（不需要真实解析产物）。"""
 import json
+import os
 from pathlib import Path
 
+import cv2
 import fakeredis
+import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
-from app.api.level_view import build_level_html, collect_level_detail
+from app.api.level_view import _markers, build_level_html, collect_level_detail
 from app.level_contracts import LEVEL_ERROR_MESSAGES, LEVEL_STATUS_MESSAGES
 from app.services.job_store import JobStore
 
@@ -197,3 +200,106 @@ def test_view_does_not_pollute_contract_endpoint(client, tmp_path):
     for review_only in ('platforms', 'canvas', 'artifacts', 'progress'):
         assert review_only not in body
     assert body['result']['artifacts']['levelJsonUrl'].startswith(f'{BASE}/artifacts/')
+
+
+# —— 起点圆圈 / 旗帜标记：画几个就标几个，被丢弃的候选也要看得见 ——
+
+MARKERS = {
+    'width': 900, 'height': 560,
+    'starts': [{'id': 'start_001', 'x': 100, 'y': 300, 'width': 40, 'height': 40, 'confidence': .9},
+               {'id': 'start_002', 'x': 320, 'y': 300, 'width': 36, 'height': 36, 'confidence': .9}],
+    'goals': [{'id': 'goal_001', 'x': 700, 'y': 200, 'width': 40, 'height': 140, 'confidence': .9}],
+}
+
+
+def _detail_with_markers(tmp_path, markers):
+    job_dir = tmp_path / 'jobs' / 'level_m'
+    job_dir.mkdir(parents=True)
+    (job_dir / 'rectified.png').write_bytes(b'png')
+    detail = collect_level_detail('level_m', job_dir, {'status': 'failed'})
+    detail['markers'] = markers
+    return detail
+
+
+def test_markers_list_every_candidate_not_just_the_first(tmp_path):
+    """多个起点必须逐个画出来：只标第一个就等于看不出"画重了"。"""
+    html = build_level_html(_detail_with_markers(tmp_path, MARKERS))
+    assert '起点与旗帜标记' in html
+    for candidate in ('start_001', 'start_002', 'goal_001'):
+        assert candidate in html
+    assert '识别到的起点 2 个' in html and '识别到的旗帜 1 个' in html
+    # 每个起点一个圆环 + 一个圆心点，两个起点共 4 个 circle
+    assert html.count('<circle ') == 4
+    assert html.count('<polygon ') == 1          # 旗帜图标：旗杆 + 三角旗面
+    assert '<svg viewBox="0 0 900 560">' in html
+
+
+def test_markers_without_candidates_still_show_the_image(tmp_path):
+    """一个都没识别到也要出图 + 说明，好让人对着原图找原因。"""
+    html = build_level_html(_detail_with_markers(tmp_path, {'width': 900, 'height': 560,
+                                                            'starts': [], 'goals': []}))
+    assert '未识别到起点圆圈' in html and '未识别到旗帜' in html
+    assert f'{BASE}/artifacts/level_m/rectified.png' not in html   # 无 base_url 时保持站内相对路径
+    assert '/artifacts/level_m/rectified.png' in html
+    assert '<circle ' not in html
+
+
+def test_marker_section_needs_rectified_image(tmp_path):
+    """拉正图缺失时整节不出现：不能给出坏链接，也不能出现空 src。"""
+    job_dir = tmp_path / 'jobs' / 'level_q'
+    job_dir.mkdir(parents=True)
+    html = build_level_html(collect_level_detail('level_q', job_dir, {'status': 'queued'}))
+    assert '起点与旗帜标记' not in html
+    assert 'src=""' not in html
+
+
+def _drawing(circle=True, flag=True):
+    image = np.full((560, 900, 3), 245, np.uint8)
+    cv2.line(image, (40, 400), (280, 400), (25, 25, 25), 4)
+    cv2.line(image, (600, 220), (840, 220), (25, 25, 25), 4)
+    if circle:
+        cv2.circle(image, (120, 380), 18, (25, 25, 25), 3)
+    if flag:
+        cv2.line(image, (740, 150), (742, 220), (25, 25, 25), 3)
+        cv2.polylines(image, [np.array([[740, 150], [780, 161], [741, 180]], np.int32)],
+                      True, (25, 25, 25), 3)
+    return image
+
+
+def test_view_reports_markers_detected_on_rectified_image(tmp_path):
+    """历史任务也能用：产物里没有标记信息时，直接在拉正图上重跑一遍检测。"""
+    job_dir = tmp_path / 'jobs' / 'level_m'
+    job_dir.mkdir(parents=True)
+    cv2.imwrite(str(job_dir / 'rectified.png'), _drawing())
+
+    detail = collect_level_detail('level_m', job_dir, {'status': 'ready'})
+    assert detail['markers']['width'] == 900 and detail['markers']['height'] == 560
+    assert detail['markers']['starts'] and detail['markers']['goals']
+
+    html = build_level_html(detail)
+    assert 'start_001' in html and 'goal_001' in html
+
+
+def test_view_survives_unreadable_rectified_image(tmp_path):
+    """产物是坏文件时只让标记缺席，不能把整页带崩。"""
+    job_dir = tmp_path / 'jobs' / 'level_m'
+    job_dir.mkdir(parents=True)
+    (job_dir / 'rectified.png').write_bytes(b'not a png')
+
+    detail = collect_level_detail('level_m', job_dir, {'status': 'ready'})
+    assert detail['markers'] is None
+    assert '起点与旗帜标记' not in build_level_html(detail)
+
+
+def test_marker_cache_follows_the_current_rectified_image(tmp_path):
+    """缓存必须跟着产物版本走：重跑覆盖拉正图后不能继续显示旧标记。"""
+    job_dir = tmp_path / 'jobs' / 'level_m'
+    job_dir.mkdir(parents=True)
+    path = job_dir / 'rectified.png'
+    cv2.imwrite(str(path), _drawing())
+    assert _markers(job_dir)['starts']
+
+    cv2.imwrite(str(path), _drawing(circle=False, flag=False))
+    os.utime(path, ns=(path.stat().st_atime_ns + 10 ** 9, path.stat().st_mtime_ns + 10 ** 9))
+
+    assert _markers(job_dir)['starts'] == []

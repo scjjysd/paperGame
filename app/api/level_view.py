@@ -4,10 +4,15 @@
 本模块是给人看的审查视图 —— 把平台、出生点、终点、可玩性告警叠在拉正图上，
 浏览器直接打开就能判断"识别对不对、关卡能不能玩"。
 
+起点圈和旗帜是识别层筛出来的候选，最终只发布唯一一个（多个就判 AMBIGUOUS_*），
+被丢掉的候选在产物里查不到。所以本模块额外把两类标记逐个标在拉正图上（见 _markers），
+审查时能直接看到"画了几个、各被当成什么"，而不是只知道失败码。
+
 样式与拼装函数复用 review_html，角色审查页（character_view）用的是同一套。
 """
 import json
 import logging
+import threading
 from datetime import datetime
 from html import escape
 from pathlib import Path
@@ -32,6 +37,13 @@ STATUS_COLOR = {'ready': '#1a7f37', 'needs_fix': '#9a6700', 'needs_review': '#82
 PLAYABILITY_COLOR = {'playable': '#1a7f37', 'unreachable': '#cf222e'}
 PLAYABILITY_LABEL = {'playable': '可玩', 'unreachable': '不可达', 'not_checked': '未检查'}
 PATH_COLOR, OFF_PATH_COLOR, GOAL_COLOR, START_COLOR = '#1a7f37', '#d97706', '#cf222e', '#ff00ff'
+# 标记候选的图标配色：紫 = 起点圆圈，红 = 旗帜（与"最终选中"的出生点/终点色区分开）
+MARKER_START_COLOR, MARKER_GOAL_COLOR = '#c026d3', '#cf222e'
+MARKER_KINDS = (('starts', '起点'), ('goals', '旗帜'))
+# 标记复核结果按 (路径, 大小, mtime) 缓存：审查页刷新多次不必反复跑 OpenCV
+MARKER_CACHE_LIMIT = 64
+_MARKER_CACHE: Dict[Any, Optional[Dict[str, Any]]] = {}
+_MARKER_CACHE_LOCK = threading.Lock()
 
 # (响应字段, 磁盘文件名, 中文说明)：只列真实存在的文件，缺产物不给坏链接
 ARTIFACTS: Tuple[Tuple[str, str, str], ...] = (
@@ -61,6 +73,9 @@ ul.meta{margin:0;padding-left:18px}
 .ok{color:#1a7f37}
 .warn{color:#9a6700}
 .bad{color:#cf222e}
+.markers{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:16px}
+.markers figure{width:100%}
+.markers .overlay,.markers img{width:100%}
 """
 
 
@@ -135,6 +150,61 @@ def _message(status: str, review: Optional[Dict], error: Optional[Dict],
     return base
 
 
+def _cell(box: Any, prefix: str, index: int) -> Dict[str, Any]:
+    """检测层的 (x, y, width, height) 元组 -> 审查页/页面共用的候选结构。"""
+    x, y, width, height = (int(value) for value in box)
+    return {'id': '{}_{:03d}'.format(prefix, index), 'x': x, 'y': y,
+            'width': width, 'height': height, 'confidence': .9}
+
+
+def _detect_markers(job_dir: Path) -> Optional[Dict[str, Any]]:
+    """在拉正图上跑一遍标记检测，拿到全部起点圆圈与旗帜候选（含最终被丢弃的那些）。
+
+    只读产物、不写任何文件：改识别参数后刷新审查页就能看到效果，历史任务同样有效。
+    cv2 / level_markers 延后导入 —— 审查页不是热路径，不值得让 API 进程常驻 OpenCV。
+    """
+    path = job_dir / 'rectified.png'
+    if not path.exists():
+        return None
+    try:
+        import cv2
+
+        from app.services import level_markers
+
+        image = cv2.imread(str(path), cv2.IMREAD_COLOR)
+        if image is None:
+            return None
+        circles, flags = level_markers.detect_markers(image)
+    except Exception:      # 审查页先保证能打开：标记复核失败只让这两张图缺席
+        logger.warning('关卡 %s 的标记复核识别失败，审查页跳过起点/旗帜标注', job_dir.name, exc_info=True)
+        return None
+    return {'width': int(image.shape[1]), 'height': int(image.shape[0]),
+            'starts': [_cell(box, 'start', i) for i, box in enumerate(circles, 1)],
+            'goals': [_cell(box, 'goal', i) for i, box in enumerate(flags, 1)]}
+
+
+def _markers(job_dir: Path) -> Optional[Dict[str, Any]]:
+    """带进程内缓存的标记候选：同一张拉正图反复刷新只算一次。
+
+    缓存键带文件大小与纳秒修改时间 —— 产物被重跑覆盖时自动失效，不会给出旧标记。
+    """
+    path = job_dir / 'rectified.png'
+    try:
+        stat = path.stat()
+        key = (str(path), stat.st_size, stat.st_mtime_ns)
+    except OSError:
+        return None
+    with _MARKER_CACHE_LOCK:
+        if key in _MARKER_CACHE:
+            return _MARKER_CACHE[key]
+    markers = _detect_markers(job_dir)
+    with _MARKER_CACHE_LOCK:
+        if len(_MARKER_CACHE) >= MARKER_CACHE_LIMIT:
+            _MARKER_CACHE.clear()
+        _MARKER_CACHE[key] = markers
+    return markers
+
+
 def collect_level_detail(job_id: str, job_dir: Path, data: Optional[Dict],
                          base_url: str = '') -> Dict[str, Any]:
     """扫描 job_dir + 终态载荷，汇总关卡审查视图。缺失内容一律 None/空。
@@ -174,6 +244,7 @@ def collect_level_detail(job_id: str, job_dir: Path, data: Optional[Dict],
             'stage': stage, 'stageLabel': LEVEL_STAGE_MESSAGES.get(stage, stage),
             'percent': 0 if status == 'queued' else 55},
         'canvas': _canvas(level, job_dir),
+        'markers': _markers(job_dir),
         'artifacts': _artifacts(job_id, job_dir, base_url),
         'level': level,
         'analysis': analysis or None,
@@ -234,6 +305,87 @@ def _svg(detail: Dict[str, Any]) -> str:
                                                   GOAL_COLOR, stroke))
         text(goal.get('x', 0), goal.get('y', 0), '终点', GOAL_COLOR)
     return '<svg viewBox="0 0 {} {}">{}</svg>'.format(width, height, ''.join(parts))
+
+
+def _marker_svg(markers: Dict[str, Any], kind: str) -> str:
+    """把某一类标记候选逐个画成图标：起点 = 紫圆环 + 圆心点，旗帜 = 红虚线框 + 三角旗。
+
+    多个候选全部画出来（纸上画了几个就标几个），不挑"最像的那一个"。
+    """
+    width, height = markers.get('width'), markers.get('height')
+    items = markers.get(kind) or []
+    if not (width and height) or not items:
+        return ''
+    color = MARKER_START_COLOR if kind == 'starts' else MARKER_GOAL_COLOR
+    stroke = max(2, min(width, height) // 250)
+    # 图在页面上会被缩到几百像素宽，字号按画布尺寸给足，不然标签小到看不清
+    font = max(12, min(width, height) // 40)
+    parts: List[str] = []
+
+    def label(x: float, y: float, text: str) -> None:
+        # 白描边压在照片上：纸面深浅不一，纯色小字经常糊掉
+        parts.append('<text x="{}" y="{}" font-size="{}" fill="{}" stroke="#fff" stroke-width="{}" '
+                     'paint-order="stroke">{}</text>'.format(x, y, font, color, max(2, stroke), escape(text)))
+
+    for item in items:
+        x, y, box_w, box_h = item['x'], item['y'], item['width'], item['height']
+        name = str(item.get('id') or '')
+        if kind == 'starts':
+            center_x, center_y = x + box_w / 2, y + box_h / 2
+            radius = max(stroke * 3, min(box_w, box_h) / 2)
+            parts.append('<circle cx="{}" cy="{}" r="{}" fill="none" stroke="{}" stroke-width="{}"/>'
+                         .format(center_x, center_y, radius, color, stroke))
+            parts.append('<circle cx="{}" cy="{}" r="{}" fill="{}"/>'
+                         .format(center_x, center_y, max(2, stroke), color))
+            label(center_x + radius + stroke * 2, center_y + font * .35, name)
+        else:
+            parts.append('<rect x="{}" y="{}" width="{}" height="{}" fill="none" stroke="{}" '
+                         'stroke-width="{}" stroke-dasharray="{} {}"/>'
+                         .format(x, y, box_w, box_h, color, stroke, stroke * 3, stroke * 2))
+            # 旗帜图标：旗杆 + 单侧三角旗面，画在候选框左上角，保证一眼认出这是"旗帜"
+            icon = max(font, min(font * 1.6, box_h * .6, box_w * 1.6))
+            base_y = max(icon + stroke, float(y))
+            parts.append('<line x1="{}" y1="{}" x2="{}" y2="{}" stroke="{}" stroke-width="{}"/>'
+                         .format(x, base_y, x, base_y - icon, color, stroke))
+            parts.append('<polygon points="{},{} {},{} {},{}" fill="{}"/>'
+                         .format(x, base_y - icon, x + icon * .9, base_y - icon * .72,
+                                 x, base_y - icon * .44, color))
+            label(x + icon * 1.1, base_y - icon + font * .8, name)
+    return '<svg viewBox="0 0 {} {}">{}</svg>'.format(width, height, ''.join(parts))
+
+
+def _marker_figure(detail: Dict[str, Any], kind: str) -> str:
+    """拉正图 + 该类标记的全部候选图标；一个都没识别到时也出图，好让人对照原图找原因。"""
+    markers = detail.get('markers') or {}
+    items = markers.get(kind) or []
+    image_url = (detail.get('artifacts') or {}).get('rectifiedImageUrl')
+    if not image_url:
+        return ''
+    if kind == 'starts':
+        caption = ('识别到的起点 {} 个（紫圈 = 检测到的圆形起点，标签为候选 ID）'.format(len(items)) if items
+                   else '未识别到起点圆圈：检查圆圈是否闭合、笔画是否足够深。')
+    else:
+        caption = ('识别到的旗帜 {} 个（红框+三角旗 = 检测到的旗帜候选，标签为候选 ID）'.format(len(items)) if items
+                   else '未识别到旗帜：检查旗杆是否竖直、旗面是否为三角形。')
+    return ('<figure><div class="overlay"><img src="{}" alt="{}">{}</div>'
+            '<figcaption>{}</figcaption></figure>'.format(
+                escape(image_url, quote=True), escape(caption), _marker_svg(markers, kind), escape(caption)))
+
+
+def _markers_html(detail: Dict[str, Any]) -> str:
+    markers = detail.get('markers')
+    if not markers:
+        return ''
+    figures = ''.join(_marker_figure(detail, kind) for kind, _label in MARKER_KINDS)
+    if not figures:
+        return ''
+    rows = [[item.get('id'), label, '({}, {})'.format(item.get('x'), item.get('y')),
+             '{}x{}'.format(item.get('width'), item.get('height')), item.get('confidence')]
+            for kind, label in MARKER_KINDS for item in markers.get(kind) or []]
+    note = ('<p class="meta">在拉正图上重新识别出的原始候选：画了几个就列几个，'
+            '服务端最终只接受唯一一个起点与唯一一个旗帜。</p>')
+    return note + '<div class="markers">{}</div>'.format(figures) + table(
+        ['候选 ID', '类型', '左上角', '区域(px)', '置信度'], rows, numeric_columns=(4,))
 
 
 def _overlay_figure(detail: Dict[str, Any]) -> str:
@@ -347,6 +499,7 @@ def build_level_html(detail: Dict[str, Any]) -> str:
     links = link_list([(label, artifacts.get(field)) for field, _name, label in ARTIFACTS])
     body = (
         section('关卡图与产物', '<div class="row">{}</div>'.format(images))
+        + section('起点与旗帜标记', _markers_html(detail))
         + section('识别结果叠加', '<div class="wide">{}</div>'.format(_overlay_figure(detail)))
         + section('平台清单', table(['平台 ID', '起点', '终点', '长度(px)', '置信度', '在可达路径上'],
                                    _platform_rows(detail), numeric_columns=(3, 4))

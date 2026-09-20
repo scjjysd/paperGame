@@ -1,4 +1,9 @@
-"""按闭合圆形和三角旗面＋向下旗杆提取标记，不判断平台承载或可达性。"""
+"""按闭合圆形和三角旗面＋向下旗杆提取标记，不判断平台承载或可达性。
+
+起点圆的判定分两条路：形状类判据（`_looks_circular` / `_is_quadrilateral_outline` /
+`_inside_elongated_slot`）负责否掉伪圆，`_inner_dot`（方案 A：圈里点一个点）负责
+**正向**认定起点并绕过上述形状判据——单色笔下后者是唯一不会误杀合法起点的判据。
+"""
 import cv2
 import numpy as np
 
@@ -58,6 +63,117 @@ def _is_quadrilateral_outline(mask, region):
     return (len(polygon) == 4 and .65 <= contour_width / max(1, contour_height) <= 1.55)
 
 
+def _inside_elongated_slot(mask, region, expand=1.5, aspect=1.6, stride_limit=1.25):
+    """候选中心是否落在一条「比候选本身长出很多、截面很窄」的空隙走廊里。
+
+    平台被画成长方框时，每个端头/拐角在局部看都很像一段圆角弧：两条长边恰好落在
+    候选半径附近，端弧补上其余方向，霍夫圆与轮廓复核都会接受它（实测一张手绘图上
+    6 个方框端头全部被当成起点圆圈，导致 AMBIGUOUS_START）。区分依据是候选中心所在的
+    **背景空隙**形状：圆环内部是近似方形的空腔，方框内部则是一条细长走廊。
+    两个条件必须同时成立：只看细长会把「圆环被一条线切成两半」的半圆空腔误判成走廊。
+    """
+    x, y, width, height = region
+    center_x, center_y = x + width // 2, y + height // 2
+    left = max(0, int(round(x - expand * width)))
+    top = max(0, int(round(y - expand * height)))
+    right = min(mask.shape[1], int(round(x + (1 + expand) * width)))
+    bottom = min(mask.shape[0], int(round(y + (1 + expand) * height)))
+    window = (mask[top:bottom, left:right] == 0).astype(np.uint8)
+    row, column = center_y - top, center_x - left
+    if not (0 <= row < window.shape[0] and 0 <= column < window.shape[1]):
+        return False
+    _, labels, stats, _ = cv2.connectedComponentsWithStats(window, 4)
+    label = labels[row, column]
+    if label == 0:
+        # 中心落在笔画上（实心标记），空隙证据不可用，交给轮廓判据。
+        return False
+    _, _, slot_width, slot_height, _ = (int(value) for value in stats[label])
+    long_side, short_side = max(slot_width, slot_height), min(slot_width, slot_height)
+    if long_side < short_side * aspect:
+        return False
+    stride = slot_width / max(1, width) if slot_width >= slot_height else slot_height / max(1, height)
+    return stride >= stride_limit
+
+
+def _minimum_marker_size(shape):
+    """标记的下限尺寸（像素）：合成起点圆直径 0.07 倍画布宽，手绘圆同量级。
+
+    自适应阈值会在空白纸纹上偶发闭合小噪点（实测 8×10 像素），轮廓复核会把它当成
+    第二个圆圈，因此小于该下限的候选一律不作为标记。
+    """
+    return max(12, int(round(min(shape[:2]) * .022)))
+
+
+def _inner_dot(mask, region, pad=3, min_ratio=.004, max_ratio=.10,
+               min_cavity_ratio=.15, max_offset=.45, limit=2):
+    """环内是否存在一个「与环不相连的孤立小墨点」——单色笔下的起点画法（方案 A）。
+
+    孩子画起点时改成「画一个圈，圈里点一个点」。这样起点就有了**正向**判据：
+    真圆带点时环内是「近似方形的空腔 + 中央一个小墨点」；而全部已知的伪圆家族
+    （方框端头、细长槽端头、方框直角、纸纹噪点）环内都是**空**的——实测内点存在率
+    0.14~0.27 vs 0.00，无一例外。因此它可以用作白名单：命中即无条件保留，不再受
+    `_looks_circular` / `_is_quadrilateral_outline` / `_inside_elongated_slot` 影响
+    （后两者在「细圆 + 很粗的平台线」画法下会误杀合法起点，见回归用例）。
+
+    实现：从候选窗口四边泛洪填充背景，淹不到的背景就是**环内空腔**——这样不必先
+    判断哪块墨迹是环。空腔的填洞轮廓就是环的内边界，落在它里面的墨迹只可能是内点。
+    中心被切、环不闭合（如细长槽端头）时取不到空腔，直接返回 False，不擅自定义。
+    """
+    x, y, width, height = region
+    left, top = max(0, x - pad), max(0, y - pad)
+    right = min(mask.shape[1], x + width + pad)
+    bottom = min(mask.shape[0], y + height + pad)
+    window = mask[top:bottom, left:right]
+    if window.size == 0:
+        return False
+    flood = (window == 0).astype(np.uint8)
+    if not flood.any():
+        return False
+    for row, column in ((0, 0), (0, flood.shape[1] - 1),
+                        (flood.shape[0] - 1, 0), (flood.shape[0] - 1, flood.shape[1] - 1)):
+        if flood[row, column]:
+            cv2.floodFill(flood, np.zeros((flood.shape[0] + 2, flood.shape[1] + 2), np.uint8),
+                          (column, row), 2)
+    cavity = ((window == 0) & (flood != 2)).astype(np.uint8)
+    if not cavity.any():
+        return False
+    count, labels, _, centroids = cv2.connectedComponentsWithStats(cavity, 8)
+    center_x, center_y = x + width // 2 - left, y + height // 2 - top
+    best, best_distance = 0, None
+    for label in range(1, count):
+        cx, cy = centroids[label]
+        distance = (cx - center_x) ** 2 + (cy - center_y) ** 2
+        if best_distance is None or distance < best_distance:
+            best, best_distance = label, distance
+    if not best:
+        return False
+    contours, _ = cv2.findContours((labels == best).astype(np.uint8), cv2.RETR_EXTERNAL,
+                                   cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return False
+    interior = np.zeros_like(cavity)
+    cv2.drawContours(interior, [max(contours, key=cv2.contourArea)], -1, 1, cv2.FILLED)
+    radius = min(width, height) / 2
+    interior_area = int(interior.sum())
+    if interior_area < np.pi * radius ** 2 * min_cavity_ratio:
+        return False
+    # 收 1 像素，避免把环的内边缘算成内点。
+    interior = cv2.erode(interior, np.ones((3, 3), np.uint8))
+    if not interior.any():
+        return False
+    dots = ((window > 0) & (interior > 0)).astype(np.uint8)
+    found, _, dot_stats, dot_centroids = cv2.connectedComponentsWithStats(dots, 8)
+    qualified = 0
+    for label in range(1, found):
+        if not min_ratio <= dot_stats[label, cv2.CC_STAT_AREA] / interior_area <= max_ratio:
+            continue
+        cx, cy = dot_centroids[label]
+        if np.hypot(cx - center_x, cy - center_y) / radius > max_offset:
+            continue
+        qualified += 1
+    return 1 <= qualified <= limit
+
+
 def _looks_like_pen_ink(image, mask, region):
     """保留黑笔或深色彩笔，排除浅色高饱和度印刷 Logo/字母。"""
     x, y, w, h = region
@@ -82,7 +198,8 @@ def _hough_circles(gray, mask):
     for x, y, radius in found[0]:
         region = (max(0, int(round(x - radius))), max(0, int(round(y - radius))),
                   int(round(2 * radius)), int(round(2 * radius)))
-        if _looks_circular(mask, region) and not _is_quadrilateral_outline(mask, region):
+        if (_inner_dot(mask, region)
+                or (_looks_circular(mask, region) and not _is_quadrilateral_outline(mask, region))):
             # 手绘圆紧邻平台时，底边缘会被直线干扰；留少量余量作为角色落脚点。
             region = (region[0], region[1], region[2], region[3] + max(2, int(round(radius * .15))))
             result.append(region)
@@ -175,6 +292,18 @@ def _pole_flags(mask, circular_regions=()):
     return _distinct(result)
 
 
+def _contains(outer, inner, slack=8):
+    """inner 是否整体落在 outer 内（允许 slack 像素溢出）。
+
+    圆圈侧弧会被概率霍夫当成旗杆、再凑出一块伪三角旗面，这类伪旗**整体位于圆圈框内**；
+    真旗帜只可能与圆圈局部相交。用它区分「伪旗」与「真旗压在圆圈上」两种情况。
+    """
+    x, y, w, h = inner
+    a, b, c, d = outer
+    return (x >= a - slack and y >= b - slack
+            and x + w <= a + c + slack and y + h <= b + d + slack)
+
+
 def _overlap_ratio(first, second):
     """返回交集占较小候选框的比例，用于去掉圆圈触发的伪旗杆。"""
     ax, ay, aw, ah = first
@@ -193,20 +322,36 @@ def detect_markers(image):
     contours, _ = cv2.findContours(mask, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
     circles = _hough_circles(gray, mask)
     flags = _pole_flags(mask, circles)
+    marker_floor = _minimum_marker_size(mask.shape)
     for contour in contours:
         area = abs(cv2.contourArea(contour))
         perimeter = cv2.arcLength(contour, True)
         x, y, w, h = cv2.boundingRect(contour)
-        if area < 35 or perimeter == 0 or min(w, h) < 8 or max(w, h) > min(image.shape[:2]) * .25:
+        if (area < 35 or perimeter == 0 or min(w, h) < marker_floor
+                or max(w, h) > min(image.shape[:2]) * .25):
             continue
         polygon = cv2.approxPolyDP(contour, .035 * perimeter, True)
         circularity = 4 * np.pi * area / perimeter ** 2
         region = (x, y, w, h)
         if (len(polygon) >= 6 and .7 <= w / h <= 1.4 and circularity >= .63
-                and _looks_circular(mask, region)):
+                and (_inner_dot(mask, region) or _looks_circular(mask, region))):
             circles.append(region)
     flags = [flag for flag in _distinct(flags) if flag[3] >= min(mask.shape) * .07]
-    circles = [circle for circle in _distinct(circles)
-               if not any(_overlap_ratio(circle, flag) >= .25 for flag in flags)
+    # 「圈中点」（方案 A）是唯一的正向判据，命中即无条件保留：它证明孩子明确标注了
+    # 起点位置，因而不再受形状类判据约束——下方两个判据在「细圆 + 粗平台线」画法下
+    # 都会误杀合法起点（实测 r=12/线粗14 与 r=14/线粗14 直接判成没有起点）。
+    distinct = _distinct(circles)
+    dotted = {circle for circle in distinct if _inner_dot(mask, circle)}
+    # 长方框的端头/拐角必须先按「中心位于细长空隙」判废：它局部看就是一段圆角弧，
+    # 轮廓复核也拦不住，只有看空隙的整体形状才能区分（实测 AMBIGUOUS_START 根因）。
+    verified = [circle for circle in distinct
+                if circle in dotted or not _inside_elongated_slot(mask, circle)]
+    # 伪旗必须先按「整体落在圆圈框内」判废：否则下面的互斥规则会把真圆圈当成
+    # 「与旗帜重叠的圆形噪声」删掉，只留下圆圈自己凑出来的假旗帜（实测 START_NOT_FOUND）。
+    flags = [flag for flag in flags
+             if not any(_contains(circle, flag) for circle in verified)]
+    circles = [circle for circle in verified
+               if (circle in dotted
+                   or not any(_overlap_ratio(circle, flag) >= .25 for flag in flags))
                and _looks_like_pen_ink(image, mask, circle)]
     return circles, flags

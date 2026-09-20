@@ -102,6 +102,81 @@ def test_small_rectangular_platform_is_not_detected_as_second_circle(tmp_path):
     assert abs(result.start_candidates[0].y - 398) <= 5
 
 
+def test_box_shaped_platforms_keep_single_start(tmp_path):
+    """平台被画成闭合长方框时，框的端头/拐角会被当成起点圆圈（实测 AMBIGUOUS_START）。
+
+    方框端头局部看就是一段圆角弧：两条长边恰好落在候选半径附近，端弧补上其余方向，
+    `_looks_circular` 与轮廓复核都会通过。只有看候选中心所在**背景空隙**的整体形状
+    （圆环内部近似方形空腔 vs 方框内部的细长走廊）才能区分。
+    """
+    image = np.full((560, 900, 3), 245, np.uint8)
+    ink = (25, 25, 25)
+    for x0, y0, x1, y1 in [(30, 40, 340, 68), (115, 196, 395, 212), (403, 246, 610, 270),
+                           (25, 447, 210, 478), (615, 292, 760, 360), (250, 480, 535, 500),
+                           (260, 140, 322, 176), (25, 395, 255, 415)]:
+        cv2.rectangle(image, (x0, y0), (x1, y1), ink, 4)
+    # 手绘起点圆（略微不圆）
+    cv2.ellipse(image, (155, 166), (16, 18), 12, 0, 360, ink, 3)
+    # 手绘终点旗帜：旗杆 + 实心三角旗面
+    cv2.line(image, (850, 70), (852, 133), ink, 4)
+    cv2.fillPoly(image, [np.array([[850, 72], [870, 92], [851, 116]], np.int32)], ink)
+    path = tmp_path / 'box-shaped-platforms.png'
+    cv2.imwrite(str(path), image)
+
+    result = detect(path, tmp_path)
+
+    assert len(result.start_candidates) == 1
+    assert abs(result.start_candidates[0].x - 155) <= 8
+    assert len(result.goal_candidates) == 1
+
+
+def test_tiny_closed_noise_blob_is_not_a_start(tmp_path):
+    """空白纸纹经自适应阈值偶发的小闭合噪点不能算起点。
+
+    实测噪点外框仅 13×10 像素（合成起点圆直径约 0.07 倍画布宽），轮廓复核却会接受它，
+    于是同一个画面上出现第二个起点 → AMBIGUOUS_START。
+    """
+    image = drawing()
+    noisy = np.array([[300, 408], [307, 410], [308, 417], [301, 419], [296, 415], [297, 411]],
+                     np.int32)
+    cv2.polylines(image, [noisy], True, (25, 25, 25), 1)
+    path = tmp_path / 'circle-and-paper-noise.png'
+    cv2.imwrite(str(path), image)
+
+    result = detect(path, tmp_path)
+
+    assert len(result.start_candidates) == 1
+    assert abs(result.start_candidates[0].x - 120) <= 5
+    assert abs(result.start_candidates[0].y - 398) <= 5
+
+
+def test_composited_start_circle_on_platform_line_keeps_start(tmp_path):
+    """客户端合成的起点标记：空心圆正压在起点平台线上（C1YugongPhotoComposite 的几何）。
+
+    圆的右侧弧会被概率霍夫当成旗杆，并凑出一块伪三角旗面；旧逻辑按「圆圈与旗帜重叠」
+    删掉真圆圈、只留伪旗，于是每次上传都必然报 START_NOT_FOUND。
+    """
+    image = np.full((560, 900, 3), 245, np.uint8)
+    # 半径 0.035W、线宽 0.006W，起点平台线紧贴圆的下缘
+    cv2.circle(image, (90, 347), 31, (0, 0, 0), 6)
+    cv2.rectangle(image, (27, 372), (153, 384), (0, 0, 0), -1)
+    # 用户手绘的平台线（自然倾斜），端点避开标记擦除区
+    cv2.line(image, (175, 325), (280, 303), (40, 40, 40), 3)
+    cv2.line(image, (376, 145), (539, 118), (40, 40, 40), 3)
+    # 合成终点旗帜：旗杆 + 右向三角旗面
+    cv2.rectangle(image, (789, 252), (795, 325), (0, 0, 0), -1)
+    cv2.fillPoly(image, [np.array([[792, 252], [824, 271], [792, 291]], np.int32)], (0, 0, 0))
+    path = tmp_path / 'composited-markers.png'
+    cv2.imwrite(str(path), image)
+
+    result = detect(path, tmp_path)
+
+    assert len(result.start_candidates) == 1
+    assert abs(result.start_candidates[0].x - 89) <= 6
+    assert abs(result.start_candidates[0].y - 378) <= 6
+    assert len(result.goal_candidates) == 1
+
+
 @pytest.mark.parametrize('points', [
     [[740, 150], [780, 150], [740, 185]],
     [[740, 150], [780, 185], [740, 185]],
@@ -242,3 +317,96 @@ def test_real_short_platform_photo_generates_all_ten_platforms(tmp_path, monkeyp
              and abs(p.start.y - 180) <= 15]
     assert len(short) == 1
     assert 56 <= short[0].end.x - short[0].start.x <= 109
+
+
+def _marker_mask(image):
+    """与 detect_markers 完全一致的前处理，供直接观测 _inner_dot 用。"""
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    mask = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                 cv2.THRESH_BINARY_INV, 31, 7)
+    return cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
+
+
+def _thick_line_circle(dot_radius=None, radius=14, thickness=14):
+    """半径 14 的圆，圆心下方 14px 处一条 14px 粗的平台线（线顶边距圆心 7px）。"""
+    image = np.full((560, 900, 3), 245, np.uint8)
+    cv2.line(image, (40, 314), (400, 314), (25, 25, 25), thickness)
+    cv2.circle(image, (150, 300), radius, (25, 25, 25), 3)
+    if dot_radius:
+        cv2.circle(image, (150, 300), dot_radius, (25, 25, 25), -1)
+    return image, (150 - radius, 300 - radius, 2 * radius, 2 * radius)
+
+
+def test_start_circle_with_inner_dot_survives_thick_platform_line(tmp_path):
+    """方案 A（圈中点）：细圆被很粗的平台线切过时，内点是唯一能救回起点的正向判据。
+
+    实测该几何（半径 14、线宽 14、线顶边距圆心 7px）下 `_looks_circular` 判定失败、
+    `_is_quadrilateral_outline` 判成四边形，轮廓通道也收不到，起点整个丢失；
+    圈内点一个点后判据命中，并绕开这两个形状判据，起点恢复。
+    """
+    from app.services import level_markers
+
+    without_dot, region = _thick_line_circle()
+    cv2.imwrite(str(tmp_path / 'without-dot.png'), without_dot)
+    assert not level_markers._inner_dot(_marker_mask(without_dot), region)
+    assert not detect(tmp_path / 'without-dot.png', tmp_path).start_candidates
+
+    with_dot, region = _thick_line_circle(dot_radius=3)
+    cv2.imwrite(str(tmp_path / 'with-dot.png'), with_dot)
+    assert level_markers._inner_dot(_marker_mask(with_dot), region)
+    result = detect(tmp_path / 'with-dot.png', tmp_path)
+    assert len(result.start_candidates) == 1
+    assert abs(result.start_candidates[0].x - 150) <= 8
+
+
+@pytest.mark.parametrize('shape', ['slot-end', 'long-slot-end', 'small-box',
+                                   'sharp-corner', 'paper-noise', 'plain-circle'])
+def test_pseudo_circle_families_have_no_inner_dot(shape):
+    """白名单的前置条件：已知伪圆家族环内必须取不到内点，否则会成倍放大误检。"""
+    from app.services import level_markers
+
+    ink = (25, 25, 25)
+    image = np.full((560, 900, 3), 245, np.uint8)
+    if shape in ('slot-end', 'long-slot-end'):
+        length = 260 if shape == 'slot-end' else 420
+        cv2.line(image, (120, 362), (120 + length, 362), ink, 4)
+        cv2.line(image, (120, 398), (120 + length, 398), ink, 4)
+        cv2.ellipse(image, (120, 380), (18, 18), 0, 90, 270, ink, 4)
+        region = (102, 362, 36, 36)
+    elif shape == 'small-box':
+        cv2.rectangle(image, (100, 352), (130, 380), ink, 3)
+        region = (100, 352, 30, 28)
+    elif shape == 'sharp-corner':
+        cv2.rectangle(image, (80, 240), (320, 380), ink, 4)
+        region = (302, 362, 36, 36)
+    elif shape == 'paper-noise':
+        cv2.polylines(image, [np.array([[300, 408], [307, 410], [308, 417], [301, 419],
+                                        [296, 415], [297, 411]], np.int32)],
+                      True, ink, 1)
+        region = (296, 408, 12, 11)
+    else:
+        cv2.circle(image, (120, 380), 18, ink, 3)
+        region = (99, 362, 35, 35)
+    assert not level_markers._inner_dot(_marker_mask(image), region)
+
+
+def test_dot_outside_the_ring_is_not_an_inner_dot(tmp_path):
+    """点必须落在环内：画在圈外的点不能触发白名单（否则任何涂鸦都能当起点）。"""
+    from app.services import level_markers
+
+    image, region = _thick_line_circle(dot_radius=3)
+    image = np.full((560, 900, 3), 245, np.uint8)
+    cv2.line(image, (40, 314), (400, 314), (25, 25, 25), 14)
+    cv2.circle(image, (150, 300), 14, (25, 25, 25), 3)
+    cv2.circle(image, (250, 300), 3, (25, 25, 25), -1)
+    assert not level_markers._inner_dot(_marker_mask(image), region)
+
+
+def test_scribbled_ring_interior_is_not_an_inner_dot():
+    """环内涂满小点不是「点一个点」：超过上限的点数一律不算，避免涂鸦被当成起点。"""
+    from app.services import level_markers
+
+    image, region = _thick_line_circle()
+    for offset in (-8, -4, 0, 4, 8):
+        cv2.circle(image, (150 + offset, 300), 2, (25, 25, 25), -1)
+    assert not level_markers._inner_dot(_marker_mask(image), region)
