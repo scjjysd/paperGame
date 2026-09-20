@@ -324,6 +324,32 @@ def test_real_photo_without_four_visible_paper_edges_generates_level(
     assert len(result.result.level.blocks) == block_count
 
 
+def test_closeup_without_visible_paper_edges_keeps_corner_flag(tmp_path, monkeypatch):
+    """纸铺满画面时，画在纸角附近的旗帜不能被降级路径的固定边缘内缩删掉。
+
+    降级画布就是取景框内区域本身，画布内任何位置都可能是合法标记；此前 5% 内缩
+    （45px）会把旗面中心在 96.3% 宽度处的合法终点剔除，报出 GOAL_NOT_FOUND。
+    """
+    from app.level_contracts import LevelReady
+    from app.services.level_parser import parse
+
+    for key in ('LEVEL_LLM_BASE_URL', 'LEVEL_LLM_API_KEY', 'LEVEL_LLM_MODEL'):
+        monkeypatch.delenv(key, raising=False)
+    source = Path(__file__).resolve().parents[1] / 'testdata/levels/real/closeup-corner-flag.png'
+    (tmp_path / 'input.png').write_bytes(source.read_bytes())
+
+    result = LevelReady.model_validate(parse(tmp_path))
+
+    assert result.result.level.playerStart.source == 'detected'
+    assert abs(result.result.level.playerStart.x - 175) <= 10
+    assert abs(result.result.level.playerStart.y - 157) <= 10
+    assert abs(result.result.level.goalRegion.x - 846) <= 10
+    assert abs(result.result.level.goalRegion.y - 32) <= 10
+    assert result.result.level.goalRegion.width > 0
+    assert result.result.level.goalRegion.height >= 40
+    assert len(result.result.level.platforms) >= 5
+
+
 def test_image_without_edges_or_markers_fails_for_missing_markers(tmp_path, monkeypatch):
     from app.level_contracts import LevelFailed
     from app.services.level_parser import parse

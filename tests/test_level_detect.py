@@ -54,6 +54,7 @@ def _assert_polygon_coverage(result, points, size=(900, 560)):
     assert not np.any((actual > 0) & (allowed == 0))
 
 
+@pytest.mark.synthetic
 def test_golden_c1levels_detects_seven_platforms_with_endpoint_accuracy(tmp_path):
     root = Path(__file__).resolve().parents[1]
     image = root / 'testdata' / 'levels' / 'golden' / 'level1-background.png'

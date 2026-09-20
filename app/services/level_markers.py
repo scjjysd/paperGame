@@ -178,6 +178,9 @@ def _inner_dot(mask, region, pad=3, min_ratio=.004, max_ratio=.10,
 # 只有 0~18，两者相差数倍，阈值取在空档中间。
 MIN_PEN_CONTRAST = 45
 
+# 测量圆度前用来接上笔画断口的闭合核边长（像素）。只作用于圆度这一项，不动全局遮罩。
+CIRCLE_BRIDGE_SIZE = 5
+
 
 def _contrast_map(image):
     """每个像素相对周围背景的暗度（blackhat），用作「是不是笔迹」的判据。
@@ -373,6 +376,30 @@ def _same_marker_shape(circle, flag, area_ratio=.5):
     return (flag[2] * flag[3]) / max(1, circle[2] * circle[3]) >= area_ratio
 
 
+def _ring_circularity(mask, region):
+    """「断口接上后」的圆度：先按小核把笔画断口接上，再量外轮廓。
+
+    手绘圆环的起止笔画端头常常没接上，圆环自带 1~3px 断口。断口留在遮罩里时，轮廓链会
+    从断口扎进环内，`contourArea` 从「整圆面积」崩成「环壁薄片」，圆度随之失效——实测
+    同一张图仅把降级缩放从 0.7031 换成 0.7000：轮廓面积 636→163、圆度 0.775→0.061，
+    真起点直接丢失。只在这一项上接断口，避免改动全局遮罩影响旗杆/圈中点等其它判据。
+    """
+    x, y, w, h = region
+    sub = mask[max(0, y):y + h, max(0, x):x + w]
+    if sub.size == 0 or not sub.any():
+        return 0.0
+    bridged = cv2.morphologyEx(sub, cv2.MORPH_CLOSE,
+                               np.ones((CIRCLE_BRIDGE_SIZE, CIRCLE_BRIDGE_SIZE), np.uint8))
+    contours, _ = cv2.findContours(bridged, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return 0.0
+    outer = max(contours, key=cv2.contourArea)
+    perimeter = float(cv2.arcLength(outer, True))
+    if perimeter <= 0:
+        return 0.0
+    return 4 * np.pi * abs(float(cv2.contourArea(outer))) / perimeter ** 2
+
+
 def detect_markers(image):
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     mask = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
@@ -395,9 +422,9 @@ def detect_markers(image):
                 or max(w, h) > min(image.shape[:2]) * .25):
             continue
         polygon = cv2.approxPolyDP(contour, .035 * perimeter, True)
-        circularity = 4 * np.pi * area / perimeter ** 2
         region = (x, y, w, h)
-        if (len(polygon) >= 6 and .7 <= w / h <= 1.4 and circularity >= .63
+        if (len(polygon) >= 6 and .7 <= w / h <= 1.4
+                and _ring_circularity(mask, region) >= .63
                 and (_inner_dot(mask, region) or _looks_circular(mask, region))):
             circles.append(region)
     flags = [flag for flag in _distinct(flags) if flag[3] >= min(mask.shape) * .07]

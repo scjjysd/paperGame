@@ -12,3 +12,13 @@
 # 形状保留回归（2026-09-15）
 
 `shape-preserving-source.jpg` 是用户本次上传关卡的完整拍摄图；`shape-preserving-rectangles.png` 是同任务之前保存的 900×560 背景。预期 13 个矩形，包含两个 L 形的横向和竖向主体，不填充凹角空白，不重复生成上下边平台；可玩性为 `not_checked`。
+
+# 近拍贴角旗帜回归（2026-09-21）
+
+`closeup-corner-flag.png`：用户于 2026-09-21 提供的近拍照片，原尺寸 1280×800（等于客户端取景框 `C1PhotoCrop` 恒输出的 8:5，即上传图本身已无框外内容）。纸铺满整个画面、四边不可见，必然走 `visible_canvas_fallback`；黑色实心三角旗画在右上角，旗面中心位于画布 **96.3% 宽度**处。用于防止降级路径的固定边缘内缩把贴角合法标记删成 `GOAL_NOT_FOUND`。验收：`playerStart ≈ (176,157)`、`goalRegion ≈ (843,33,43×61)`、平台 8 条。
+
+# 样本口径（2026-09-21）
+
+识别质量**只以本目录的真实照片为准**。`testdata/levels/synthetic` 与 `testdata/levels/golden` 是
+`scripts/tools/gen_level_samples.py` 生成的合成稿（无纸纹、无光照差、无手写抖动），不代表真实拍照，
+相关用例已标 `@pytest.mark.synthetic` 并移出默认回归；需要时用 `pytest -m synthetic` 单独跑。

@@ -40,4 +40,10 @@ packages = ["app"]
 testpaths = ["tests"]
 pythonpath = ["."]
 # test_spike_batch.py 耗时长且需 TorchServe 在线，常规回归排除
-addopts = "--ignore=tests/test_spike_batch.py"
+# synthetic：历史上用 gen_level_samples 生成的合成样本（testdata/levels/synthetic、
+# testdata/levels/golden）不代表真实拍照，识别质量以 testdata/levels/real 的真实照片为准。
+# 需要时单独跑：pytest -m synthetic
+addopts = "--ignore=tests/test_spike_batch.py -m 'not synthetic'"
+markers = [
+    "synthetic: 使用历史上生成的合成样本，默认不参与回归",
+]

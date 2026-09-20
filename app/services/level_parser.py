@@ -24,6 +24,12 @@ MIN_INK_COVERAGE = .55
 # 80% 水平重叠且中心高度 4px 内视为重复检测；真实手绘平行近线加入后需重标定。
 DUPLICATE_OVERLAP = .80
 DUPLICATE_Y_DISTANCE = 4
+# 降级（可见画面）画布上，距画布边缘多近的候选视作「贴边噪声」而不参与歧义判断。
+# 上传图本身就是客户端取景框内区域（C1PhotoEditorLayout 1280x800 裁切），画布内任何
+# 位置都可能是合法标记，这里只用来挡「几乎贴在画布边缘」的桌面/书页边框噪声。
+# 实测 5% 会把画在纸角附近的旗帜一并删掉（旗面中心在 96.3% 宽度处，被 95% 门限剔除
+# → GOAL_NOT_FOUND）；降到 2% 后，10 张真实样本的结果与 5% 逐字符一致。
+VISIBLE_FRAME_MARGIN = .02
 Progress = Optional[Callable[[str], None]]
 
 REVIEW_MESSAGES = {
@@ -329,14 +335,13 @@ def parse(job_dir: Path, progress: Progress = None,
     detection = level_detect.detect(rectified.rectified_path, job_dir)
     if visible_fallback:
         # 降级画布可能包含桌面、书页边框和印刷 Logo；有效拍摄框外候选不参与歧义判断。
+        low_x, high_x = rectified.width * VISIBLE_FRAME_MARGIN, rectified.width * (1 - VISIBLE_FRAME_MARGIN)
+        low_y, high_y = rectified.height * VISIBLE_FRAME_MARGIN, rectified.height * (1 - VISIBLE_FRAME_MARGIN)
         starts = [point for point in detection.start_candidates
-                  if rectified.width * .05 < point.x < rectified.width * .95
-                  and rectified.height * .05 < point.y < rectified.height * .95]
+                  if low_x <= point.x <= high_x and low_y <= point.y <= high_y]
         goals = [goal for goal in detection.goal_candidates
-                 if rectified.width * .05 < goal.region.x + goal.region.width / 2
-                 < rectified.width * .95
-                 and rectified.height * .05 < goal.region.y + goal.region.height / 2
-                 < rectified.height * .95]
+                 if low_x <= goal.region.x + goal.region.width / 2 <= high_x
+                 and low_y <= goal.region.y + goal.region.height / 2 <= high_y]
         detection = replace(detection, start_candidates=starts, goal_candidates=goals)
     _stage(progress, 'detecting_goal')
     _stage(progress, 'semantic_review')

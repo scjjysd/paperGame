@@ -12,6 +12,11 @@ import numpy as np
 Point = Tuple[float, float]
 _GRABCUT_LOCK = threading.Lock()
 
+# 客户端取景框固定输出 8:5（C1PhotoCrop.ComputeOutputSize 恒返回 unit*8 × unit*5）。
+# 上传图宽高比落在该值附近即认定「画面本身就是取景框内区域」，降级时不得再裁切。
+FRAME_ASPECT = 1.6
+FRAME_ASPECT_TOLERANCE = .01
+
 
 class RectifyIssue(RuntimeError):
     """纸张拉正无法安全完成时抛出的业务异常。"""
@@ -318,32 +323,67 @@ def rectify(input_path: Path, job_dir: Path) -> RectifyResult:
 
 
 def normalize_visible_canvas(input_path: Path, job_dir: Path) -> RectifyResult:
-    """纸张四角不可见时，按关卡画布比例中心裁切；仅由解析器在内容可继续校验时使用。"""
+    """纸张四角不可见时的降级画布。
+
+    客户端取景框固定输出 8:5（`C1PhotoCrop.ComputeOutputSize` 恒返回 unit*8 × unit*5），
+    与 v1 画布 900:560 只差 0.44%，所以宽高比落在这个范围内的上传图**本身就是取景框内
+    画面**，框内即有效关卡区域 —— 这一路不能再用中心裁切去凑画布比例，那是白丢内容。
+    画布必须仍是 v1 的 900x560（关卡坐标系与检测阈值都按它标定），因此改为等比缩放 +
+    居中留白；留白用边缘复制，避免留白与纸面的灰度阶跃被自适应阈值抠成墨（实测用中位色
+    留白会在交界处连出 192px 宽的伪旗候选）。
+
+    宽高比明显不是取景框的输入（历史/相册原图是 4:3）仍退回按画布比例中心裁切：这类图
+    不裁切就只能留白到 713px 宽（实测 rolled-page 的起点圆会因缩小 17% 而丢失）或拉伸
+    （斜率会被压 17%），两者都比裁切更伤识别，改动需连同检测阈值一起重标定。
+    """
     image = cv2.imread(str(input_path), cv2.IMREAD_COLOR)
     if image is None:
         raise RectifyIssue('PAPER_NOT_FOUND', message='无法读取输入图片。')
     height, width = image.shape[:2]
-    target_aspect = 900.0 / 560.0
-    if width / height >= target_aspect:
-        crop_width = int(round(height * target_aspect))
-        left, top = (width - crop_width) // 2, 0
-        right, bottom = left + crop_width - 1, height - 1
+    target_w, target_h = 900, 560
+    frame = abs(width / float(height) - FRAME_ASPECT) / FRAME_ASPECT <= FRAME_ASPECT_TOLERANCE
+    if frame:
+        # 取景框内画面：等比缩放 + 居中留白，一根线都不裁。
+        scale = min(target_w / float(width), target_h / float(height))
+        src = np.array([[0, 0], [width - 1, 0], [width - 1, height - 1], [0, height - 1]],
+                       np.float32)
+        span_w, span_h = max(1, min(target_w, int(round(width * scale)))), \
+            max(1, min(target_h, int(round(height * scale))))
+        left, top = (target_w - span_w) // 2, (target_h - span_h) // 2
+        destination = np.array([
+            [left, top], [left + span_w - 1, top],
+            [left + span_w - 1, top + span_h - 1], [left, top + span_h - 1],
+        ], np.float32)
+        border = cv2.BORDER_REPLICATE
     else:
-        crop_height = int(round(width / target_aspect))
-        left, top = 0, (height - crop_height) // 2
-        right, bottom = width - 1, top + crop_height - 1
-    corners = np.array([[left, top], [right, top], [right, bottom], [left, bottom]], np.float32)
-    destination = np.array([[0, 0], [899, 0], [899, 559], [0, 559]], np.float32)
-    matrix = cv2.getPerspectiveTransform(corners, destination)
-    warped = cv2.warpPerspective(image, matrix, (900, 560), flags=cv2.INTER_LINEAR)
+        # 非取景框画面：按画布比例中心裁切（原行为）。
+        aspect = target_w / float(target_h)
+        if width / float(height) >= aspect:
+            span_w, span_h = int(round(height * aspect)), height
+        else:
+            span_w, span_h = width, int(round(width / aspect))
+        left, top = (width - span_w) // 2, (height - span_h) // 2
+        src = np.array([[left, top], [left + span_w - 1, top],
+                        [left + span_w - 1, top + span_h - 1], [left, top + span_h - 1]],
+                       np.float32)
+        destination = np.array([[0, 0], [target_w - 1, 0],
+                                [target_w - 1, target_h - 1], [0, target_h - 1]], np.float32)
+        border = cv2.BORDER_CONSTANT
+    matrix = cv2.getPerspectiveTransform(src, destination)
+    warped = cv2.warpPerspective(image, matrix, (target_w, target_h), flags=cv2.INTER_LINEAR,
+                                 borderMode=border)
     job_dir = Path(job_dir)
     job_dir.mkdir(parents=True, exist_ok=True)
     rectified_path = job_dir / 'rectified.png'
     _atomic_imwrite(rectified_path, warped)
-    _write_mask(job_dir, image.shape[:2], corners)
+    # 降级的「纸」就是整张上传画面，掩码覆盖全图。
+    _write_mask(job_dir, image.shape[:2],
+                np.array([[0, 0], [width - 1, 0], [width - 1, height - 1], [0, height - 1]],
+                         np.float32))
     transform = {'matrix': matrix.tolist(),
                  'inputSize': {'width': width, 'height': height},
-                 'outputSize': {'width': 900, 'height': 560},
-                 'mode': 'visible_canvas_fallback'}
+                 'outputSize': {'width': target_w, 'height': target_h},
+                 'mode': 'visible_canvas_fallback',
+                 'frameAspect': bool(frame)}
     _atomic_json(job_dir / 'transform.json', transform)
-    return RectifyResult(rectified_path, 900, 560, corners.tolist(), matrix.tolist())
+    return RectifyResult(rectified_path, target_w, target_h, src.tolist(), matrix.tolist())

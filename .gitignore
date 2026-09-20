@@ -33,3 +33,7 @@ testdata/output/
 
 # HTTPS 证书与私钥仅保存在部署机器
 /certs/
+
+# 本地回归临时产物（pytest basetemp / 复现脚本与备份）
+.pytest-tmp*/
+.workbuddy-tmp/

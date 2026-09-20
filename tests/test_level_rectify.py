@@ -26,6 +26,7 @@ def test_order_corners_returns_tl_tr_br_bl():
     ]
 
 
+@pytest.mark.synthetic
 def test_rectify_recovers_perspective_sample(tmp_path):
     image = SAMPLES / 'sample-01.png'
     truth = json.loads((SAMPLES / 'sample-01.json').read_text(encoding='utf-8'))
@@ -47,6 +48,7 @@ def test_rectify_recovers_perspective_sample(tmp_path):
 
 
 @pytest.mark.parametrize('number', range(10))
+@pytest.mark.synthetic
 def test_rectify_recovers_all_synthetic_variants(tmp_path, number):
     image = SAMPLES / ('sample-%02d.png' % number)
     truth = json.loads((SAMPLES / ('sample-%02d.json' % number)).read_text(encoding='utf-8'))
@@ -68,6 +70,7 @@ def test_rectify_recovers_all_synthetic_variants(tmp_path, number):
     assert cv2.imread(str(result.rectified_path)).shape[:2] == (560, 900)
 
 
+@pytest.mark.synthetic
 def test_rectify_does_not_publish_partially_written_artifacts(tmp_path, monkeypatch):
     image = SAMPLES / 'sample-01.png'
     old_rectified = tmp_path / 'rectified.png'
@@ -116,6 +119,7 @@ def test_rectify_rejects_two_similar_papers(tmp_path, background):
 
 
 @pytest.mark.parametrize('background', [100, 180])
+@pytest.mark.synthetic
 def test_rectify_rejects_occluded_paper(tmp_path, background):
     image = cv2.imread(str(SAMPLES / 'sample-00.png'))
     cv2.rectangle(image, (0, 0), (1280, 550), (background, background, background - 6), -1)
@@ -154,6 +158,7 @@ def test_rectify_recovers_real_low_contrast_paper(tmp_path, scale):
     assert cv2.imread(str(result.rectified_path)).shape[:2] == (560, 900)
 
 
+@pytest.mark.synthetic
 def test_rectify_preserves_dim_synthetic_paper_detection(tmp_path):
     image = cv2.imread(str(SAMPLES / 'sample-00.png'))
     image = (image * .7).astype(np.uint8)
