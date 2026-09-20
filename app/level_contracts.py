@@ -302,7 +302,7 @@ def canonical_profile_json(profile: PlayabilityProfile) -> bytes:
 
 
 def derive_level_job_id(content: bytes, profile: PlayabilityProfile) -> str:
-    # v4 保留凹形并拆分矩形，不复用旧外接框识别结果。
+    # v5 修复旗帜与圆候选互斥及大旗帜过滤，不复用旧标记识别结果。
     digest = hashlib.sha256(content + canonical_profile_json(profile) + ALGORITHM_MAJOR_VERSION.encode('ascii')
-                            + b':explicit-markers-v4').hexdigest()
+                            + b':explicit-markers-v5').hexdigest()
     return 'level_' + digest[:12]

@@ -262,6 +262,43 @@ def test_real_hand_drawn_photo_generates_level(tmp_path, monkeypatch):
     assert result.result.level.goalRegion.width > 0
 
 
+def test_real_flag_overlapping_circle_candidate_generates_level(tmp_path, monkeypatch):
+    """真实旗帜即使同时触发霍夫圆，也必须由旗杆＋三角旗面的正向证据保留下来。"""
+    from app.level_contracts import LevelReady
+    from app.services.level_parser import parse
+
+    for key in ('LEVEL_LLM_BASE_URL', 'LEVEL_LLM_API_KEY', 'LEVEL_LLM_MODEL'):
+        monkeypatch.delenv(key, raising=False)
+    source = Path(__file__).resolve().parents[1] / 'testdata/levels/real/phone.jpg'
+    (tmp_path / 'input.png').write_bytes(source.read_bytes())
+
+    result = LevelReady.model_validate(parse(tmp_path))
+
+    assert abs(result.result.level.playerStart.x - 163) <= 8
+    assert abs(result.result.level.playerStart.y - 202) <= 8
+    assert abs(result.result.level.goalRegion.x - 832) <= 8
+    assert abs(result.result.level.goalRegion.y - 65) <= 8
+
+
+def test_visible_canvas_fallback_keeps_large_valid_flag(tmp_path, monkeypatch):
+    """纸边不可见时，大旗帜已通过形状检测就不能再被解析器的固定高度阈值删除。"""
+    from app.level_contracts import LevelReady
+    from app.services.level_parser import parse
+
+    for key in ('LEVEL_LLM_BASE_URL', 'LEVEL_LLM_API_KEY', 'LEVEL_LLM_MODEL'):
+        monkeypatch.delenv(key, raising=False)
+    source = Path(__file__).resolve().parents[1] / 'testdata/levels/real/phone.png'
+    (tmp_path / 'input.png').write_bytes(source.read_bytes())
+
+    result = LevelReady.model_validate(parse(tmp_path))
+
+    assert len(result.result.level.platforms) == 3
+    assert abs(result.result.level.playerStart.x - 90) <= 8
+    assert abs(result.result.level.playerStart.y - 370) <= 8
+    assert abs(result.result.level.goalRegion.x - 788) <= 8
+    assert result.result.level.goalRegion.height >= 140
+
+
 @pytest.mark.parametrize('filename,start_x,goal_x,platform_count,block_count', [
     ('cropped-paper-markers.jpg', 82, 808, 9, 3),
     ('rolled-page-markers.jpg', 199, 690, 11, 2),

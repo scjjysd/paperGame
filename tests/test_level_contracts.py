@@ -57,15 +57,15 @@ def test_visible_canvas_jobs_do_not_reuse_old_marker_cache():
     assert derive_level_job_id(b'image', DEFAULT_PLAYABILITY_PROFILE) != 'level_' + old_digest[:12]
 
 
-def test_shape_geometry_v4_jobs_do_not_reuse_v3_cache():
+def test_marker_geometry_v5_jobs_do_not_reuse_v4_cache():
     import hashlib
     expected_digest = hashlib.sha256(b'image' + canonical_profile_json(DEFAULT_PLAYABILITY_PROFILE)
                                      + ALGORITHM_MAJOR_VERSION.encode('ascii')
-                                     + b':explicit-markers-v4').hexdigest()
+                                     + b':explicit-markers-v5').hexdigest()
     assert derive_level_job_id(b'image', DEFAULT_PLAYABILITY_PROFILE) == 'level_' + expected_digest[:12]
     previous_digest = hashlib.sha256(b'image' + canonical_profile_json(DEFAULT_PLAYABILITY_PROFILE)
                                      + ALGORITHM_MAJOR_VERSION.encode('ascii')
-                                     + b':explicit-markers-v3').hexdigest()
+                                     + b':explicit-markers-v4').hexdigest()
     assert derive_level_job_id(b'image', DEFAULT_PLAYABILITY_PROFILE) != 'level_' + previous_digest[:12]
 
 
