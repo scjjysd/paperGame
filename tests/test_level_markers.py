@@ -262,6 +262,30 @@ def test_real_hand_drawn_photo_generates_level(tmp_path, monkeypatch):
     assert result.result.level.goalRegion.width > 0
 
 
+def test_faint_pen_rectangle_corner_is_not_a_second_flag(tmp_path, monkeypatch):
+    """暗淡笔迹下，矩形拐角不能被当成第二面旗帜（job level_eb482c03d3e7）。
+
+    画面里有若干空心闭合矩形，其中一个矩形的左端是「两根近平行竖笔＋一条向右
+    延伸到画布边缘的长横边」。它同样能凑出三顶点凸包并通过闭包率复核，被当成
+    第二面旗，直接导致 `AMBIGUOUS_GOAL`。真旗帜的第三条边是孩子画的实体斜线，
+    所以用「凸包每条边都要落在真实墨迹上」排除这类悬空斜边。
+    """
+    from app.level_contracts import LevelReady
+    from app.services.level_parser import parse
+
+    for key in ('LEVEL_LLM_BASE_URL', 'LEVEL_LLM_API_KEY', 'LEVEL_LLM_MODEL'):
+        monkeypatch.delenv(key, raising=False)
+    source = Path(__file__).resolve().parents[1] / (
+        'testdata/levels/real/faint-pen-closed-rectangles.png')
+    (tmp_path / 'input.png').write_bytes(source.read_bytes())
+
+    result = LevelReady.model_validate(parse(tmp_path))
+
+    goal = result.result.level.goalRegion
+    assert abs(goal.x - 528) <= 10 and abs(goal.y - 41) <= 10
+    assert goal.width >= 45 and goal.height >= 60
+
+
 def test_real_flag_overlapping_circle_candidate_generates_level(tmp_path, monkeypatch):
     """真实旗帜即使同时触发霍夫圆，也必须由旗杆＋三角旗面的正向证据保留下来。"""
     from app.level_contracts import LevelReady

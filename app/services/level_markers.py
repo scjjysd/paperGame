@@ -7,6 +7,11 @@
 import cv2
 import numpy as np
 
+# 三角旗面的三条边都必须有真实墨迹支撑：沿每条边采样，落在 tolerance 像素内
+# 的采样占比不得低于 MIN_FLAG_EDGE_COVERAGE。见 _has_triangular_face 的说明。
+MIN_FLAG_EDGE_COVERAGE = .80
+FLAG_EDGE_TOLERANCE = 3.0
+
 
 def _distinct(regions):
     result = []
@@ -282,7 +287,24 @@ def _has_triangular_face(mask, pole_x, xs, ys, pole_length):
     contour = max(contours, key=cv2.contourArea)
     contour_hull = cv2.convexHull(contour)
     closure = cv2.contourArea(contour) / max(1.0, cv2.contourArea(contour_hull))
-    return closure >= .55
+    if closure < .55:
+        return False
+    # 矩形/方框的拐角同样能凑出「竖笔＋单侧横笔」的三顶点凸包：横笔是矩形的一条
+    # 长边（实测可延伸到画布边缘），补出来的斜边悬在空中，三点之间没有任何墨。
+    # 真旗帜的第三条边是孩子画的实体斜线。因此凸包的**每条边**都要落在真实墨迹上。
+    # 一次错误用例（job level_eb482c03d3e7，画面暗淡）：伪旗最低边覆盖 0.48~0.58，
+    # 真旗三条边均 1.00； MIN_FLAG_EDGE_COVERAGE × FLAG_EDGE_TOLERANCE 在
+    # .65~.95 × 2.0~4.0 的 28 档组合上结果一致，不是刀刃阈值。
+    invisible = (mask == 0).astype(np.uint8)
+    distance = cv2.distanceTransform(invisible, cv2.DIST_L2, 3)
+    vertices = polygon.reshape(-1, 2)
+    for start, end in zip(vertices, np.roll(vertices, -1, axis=0)):
+        samples = np.rint(np.linspace(start, end, max(2, int(np.linalg.norm(end - start)))))
+        column = np.clip(samples[:, 0].astype(int), 0, mask.shape[1] - 1)
+        row = np.clip(samples[:, 1].astype(int), 0, mask.shape[0] - 1)
+        if float(np.mean(distance[row, column] <= FLAG_EDGE_TOLERANCE)) < MIN_FLAG_EDGE_COVERAGE:
+            return False
+    return True
 
 
 def _pole_flags(mask):
