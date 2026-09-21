@@ -300,7 +300,9 @@ def test_visible_canvas_fallback_keeps_large_valid_flag(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize('filename,start_x,goal_x,platform_count,block_count', [
-    ('cropped-paper-markers.jpg', 82, 808, 9, 3),
+    # 降级画布下平台侧不再沿用纸张拉正的贴边门槛：cropped 顶部 3 条真笔迹此前被
+    # 当成「纸外背景」吃掉（9→12）。rolled 的纸卷上沿会横跨画布两边，仍被剔除。
+    ('cropped-paper-markers.jpg', 82, 808, 12, 3),
     ('rolled-page-markers.jpg', 199, 690, 11, 2),
 ])
 def test_real_photo_without_four_visible_paper_edges_generates_level(

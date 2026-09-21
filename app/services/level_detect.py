@@ -371,7 +371,13 @@ def _is_line_allowed(start, end, marker_regions, block_regions, threshold=.45):
     return True
 
 
-def _platforms(ink, red, image, marker_regions=(), block_regions=()):
+def _crosses_both_side_edges(x, width, w, margin=2):
+    """连通域同时贴住左右两边。翻拍场景里只有纸张/桌面边界会这样，玩家画的线不会。"""
+    return x <= margin and x + width >= w - margin
+
+
+def _platforms(ink, red, image, marker_regions=(), block_regions=(),
+               frame_canvas=False):
     mask = ink.copy(); mask[red > 0] = 0
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     # 水平形态学开运算将局部纹理压成连通平台条带；15px 闭运算只连接小断裂，
@@ -388,7 +394,15 @@ def _platforms(ink, red, image, marker_regions=(), block_regions=()):
         minimum = max(55, int(min(h, w) * .10))
         if width < minimum:
             continue
-        if y < max(25, int(h * .15)) or x <= 5 or (x + width >= w - 5 and y < int(h * .20)):
+        if frame_canvas:
+            # 降级画布就是前端取景框：边缘是玩家可见、可画的边界，只有横跨整幅的背景
+            # 边界（纸卷上沿、桌面分界）才该剔除。照搬纸张拉正那套贴边阈值会把
+            # 用户画到框边的合法平台整条吃掉（job level_3f7bc3c380b8：10 条只剩 6 条）。
+            if _crosses_both_side_edges(x, width, w):
+                continue
+        elif (y < max(25, int(h * .15)) or x <= 5
+              or (x + width >= w - 5 and y < int(h * .20))):
+            # 纸张拉正画布：边缘朝外是桌面与纸边阴影，贴边墨迹一律不算平台。
             continue
         ys, xs = np.nonzero(labels == label)
         points = np.column_stack((xs.astype(np.float32), ys.astype(np.float32)))
@@ -539,7 +553,10 @@ def _walls(ink, image, marker_regions=(), block_regions=()):
             for index, (_, _, _, candidate) in enumerate(found, 1)]
 
 
-def detect(rectified_path: Path, job_dir: Path) -> DetectionResult:
+def detect(rectified_path: Path, job_dir: Path, *,
+           frame_canvas: bool = False) -> DetectionResult:
+    """frame_canvas=True 表示画布来自 normalize_visible_canvas 的取景框降级，
+    边缘是玩家可见范围而非纸外背景，平台侧改用「横跨整幅」判据剔除背景边界。"""
     image = cv2.imread(str(rectified_path), cv2.IMREAD_COLOR)
     if image is None: raise ValueError(f'无法读取拉正图：{rectified_path}')
     job_dir = Path(job_dir); job_dir.mkdir(parents=True, exist_ok=True)
@@ -571,7 +588,8 @@ def detect(rectified_path: Path, job_dir: Path) -> DetectionResult:
             eh, ew = evidence.mask.shape
             roi = line_ink[evidence.y:evidence.y+eh, evidence.x:evidence.x+ew]
             roi[cv2.dilate(evidence.mask, np.ones((17, 17), np.uint8)) > 0] = 0
-    platforms = _platforms(line_ink, red, image, marker_regions)
+    platforms = _platforms(line_ink, red, image, marker_regions,
+                           frame_canvas=frame_canvas)
     walls = _walls(line_ink, image, marker_regions)
     goals = [GoalCandidate(f'goal_{i:03d}', RegionCandidate(x, y, w, h, .9), .9)
              for i, (x, y, w, h) in enumerate(flags, 1)]

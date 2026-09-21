@@ -57,7 +57,8 @@ def parser_stubs(tmp_path, monkeypatch):
         Image.open(input_path).save(job_dir / 'rectified.png')
         return RectifyResult(job_dir / 'rectified.png', 400, 220, [], [])
 
-    def detect(rectified_path, job_dir):
+    def detect(rectified_path, job_dir, *, frame_canvas=False):
+        state['frame_canvas'] = frame_canvas
         cv2.imwrite(str(job_dir / 'ink-mask.png'), np.full((220, 400), 255, np.uint8))
         return state['detection']
 
@@ -91,6 +92,7 @@ def test_parse_ready_writes_aligned_authoritative_artifacts(tmp_path, parser_stu
     assert (tmp_path / 'analysis.json').exists()
     assert (tmp_path / 'overlay.png').exists()
     assert parser_stubs['stages'] == STAGES
+    assert parser_stubs['frame_canvas'] is False
     assert [p.id for p in level.platforms] == ['platform_001', 'platform_002', 'platform_003']
     assert level.walls == [] and level.blocks == []
     assert level.playerStart.model_dump() == {
@@ -148,8 +150,8 @@ def test_collision_geometry_requires_ink_evidence(tmp_path, parser_stubs, monkey
     parser_stubs['detection'] = replace(parser_stubs['detection'],
                                        wall_candidates=[wall], block_candidates=[block])
     original = level_parser.level_detect.detect
-    def detect(path, directory):
-        result = original(path, directory)
+    def detect(path, directory, **kwargs):
+        result = original(path, directory, **kwargs)
         mask = cv2.imread(str(result.ink_mask_path), cv2.IMREAD_GRAYSCALE)
         mask[:60, 250:] = 0
         cv2.imwrite(str(result.ink_mask_path), mask)
@@ -165,8 +167,8 @@ def test_polygon_block_uses_actual_ink_instead_of_bounding_box_edges(tmp_path, p
     block = BlockCandidate('diamond', RegionCandidate(250, 10, 41, 41, .9), .9)
     parser_stubs['detection'] = replace(parser_stubs['detection'], block_candidates=[block])
     original = level_parser.level_detect.detect
-    def detect(path, directory):
-        result = original(path, directory)
+    def detect(path, directory, **kwargs):
+        result = original(path, directory, **kwargs)
         mask = cv2.imread(str(result.ink_mask_path), cv2.IMREAD_GRAYSCALE)
         mask[:60, 240:300] = 0
         cv2.polylines(mask, [np.array([(270, 10), (290, 30), (270, 50), (250, 30)])], True, 255, 2)
@@ -235,6 +237,7 @@ def test_rectify_failures_fall_back_to_visible_canvas(tmp_path, parser_stubs, re
     assert (tmp_path / 'overlay.png').exists()
     assert (tmp_path / 'analysis.json').exists()
     assert parser_stubs['stages'][-1] == 'publishing_artifacts'
+    assert parser_stubs['frame_canvas'] is True
 
 
 @pytest.mark.parametrize('case, reason', [

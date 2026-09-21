@@ -571,3 +571,55 @@ def test_triangle_flag_does_not_swallow_connected_long_platform(tmp_path, color,
     assert len(result.platform_candidates) == 2
     assert any(candidate.start.x < 740 < candidate.end.x
                and candidate.length >= 230 for candidate in result.platform_candidates)
+
+
+# --- 取景框降级画布（frame_canvas） -------------------------------------------------
+# 纸张拉正成功时画布就是纸本身，边缘朝外是桌面与纸边阴影，贴边墨迹一律不算平台。
+# 但 normalize_visible_canvas 降级画布 = 前端取景框内的可见画面，用户看到的、能画到的
+# 就是这个范围，画到框边合法。此时只有「横跨整幅」的背景边界才该剔除。
+
+def test_frame_canvas_keeps_platform_entering_from_left_edge(tmp_path):
+    image = tmp_path / 'frame-left-platform.png'
+    _write_image(image, size=(900, 560), lines=[(0, 300, 270, 300, 7)])
+
+    assert detect(image, tmp_path).platform_candidates == []
+    assert len(detect(image, tmp_path, frame_canvas=True).platform_candidates) == 1
+
+
+def test_frame_canvas_keeps_platform_touching_right_edge(tmp_path):
+    image = tmp_path / 'frame-right-platform.png'
+    _write_image(image, size=(900, 560), lines=[(340, 110, 899, 110, 7)])
+
+    assert detect(image, tmp_path).platform_candidates == []
+    assert len(detect(image, tmp_path, frame_canvas=True).platform_candidates) == 1
+
+
+def test_frame_canvas_keeps_platform_inside_top_band(tmp_path):
+    image = tmp_path / 'frame-top-platform.png'
+    _write_image(image, size=(900, 560), lines=[(120, 40, 420, 40, 7)])
+
+    assert detect(image, tmp_path).platform_candidates == []
+    assert len(detect(image, tmp_path, frame_canvas=True).platform_candidates) == 1
+
+
+def test_frame_canvas_still_rejects_border_spanning_both_side_edges(tmp_path):
+    image = tmp_path / 'frame-paper-border.png'
+    _write_image(image, size=(900, 560), lines=[(0, 300, 899, 300, 7)])
+
+    assert detect(image, tmp_path).platform_candidates == []
+    assert detect(image, tmp_path, frame_canvas=True).platform_candidates == []
+
+
+def test_cropped_real_photo_frame_canvas_recovers_top_platforms(tmp_path):
+    from app.services.level_rectify import normalize_visible_canvas
+
+    root = Path(__file__).resolve().parents[1]
+    source = root / 'testdata' / 'levels' / 'real' / 'cropped-paper-markers.jpg'
+    rectified = normalize_visible_canvas(source, tmp_path / 'rectify')
+
+    paper = detect(rectified.rectified_path, tmp_path / 'paper')
+    frame = detect(rectified.rectified_path, tmp_path / 'frame', frame_canvas=True)
+
+    assert len(paper.platform_candidates) == 9
+    assert len(frame.platform_candidates) == 12
+    assert len(frame.block_candidates) == len(paper.block_candidates)

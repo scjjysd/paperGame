@@ -332,7 +332,8 @@ def parse(job_dir: Path, progress: Progress = None,
         logger.info('关卡任务 %s 改用可见画面中心安全区继续识别', job_id)
     logger.info('关卡任务 %s 纸张拉正完成：画布 %dx%d', job_id, rectified.width, rectified.height)
     _stage(progress, 'detecting_platforms')
-    detection = level_detect.detect(rectified.rectified_path, job_dir)
+    detection = level_detect.detect(rectified.rectified_path, job_dir,
+                                    frame_canvas=visible_fallback)
     if visible_fallback:
         # 降级画布可能包含桌面、书页边框和印刷 Logo；有效拍摄框外候选不参与歧义判断。
         low_x, high_x = rectified.width * VISIBLE_FRAME_MARGIN, rectified.width * (1 - VISIBLE_FRAME_MARGIN)
