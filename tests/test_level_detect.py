@@ -260,11 +260,12 @@ def test_horizontal_minimum_length_uses_centerline_endpoints(
     assert len(result.platform_candidates) == expected_count
 
 
-@pytest.mark.parametrize(('length', 'expected_count'), [(55, 0), (56, 1)])
+@pytest.mark.parametrize(('length', 'expected_count'), [(29, 0), (30, 1)])
 def test_vertical_minimum_length_uses_centerline_endpoints(
         tmp_path, length, expected_count):
+    # 线宽用 4px：30px 的线若画 7px 宽会先卡在细长比门限(4.5)而非长度门限。
     image = tmp_path / f'vertical-{length}.png'
-    _write_image(image, size=(900, 560), lines=[(240, 180, 240, 180 + length, 7)])
+    _write_image(image, size=(900, 560), lines=[(240, 180, 240, 180 + length, 4)])
 
     result = detect(image, tmp_path)
 

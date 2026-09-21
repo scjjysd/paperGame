@@ -24,6 +24,12 @@ MAX_WALL_TILT_DEGREES = 30.0
 # 细长比门限：中心线长度 / 法向厚度。外接框宽高比会随倾角天然变小，不能用作判据。
 MIN_LINE_ELONGATION = 4.5
 
+# 墙最短长度：凹形/城堡垛口一笔画里的短竖笔（实测 35~54px）也是有效竖障碍。
+# 2026-09-21 扫档（real 全目录、900×560 拉正画布、含 _centerline_segment 收缩）：
+# 32 档把凹形 4 根竖笔全捞回，30~28 为平台期，取 30；其余 12 张样本零新增。
+# 注意：这个结论只对竖直方向成立——横向平台降到 7%(39px) 就会召出纸边折痕，两者不可共用。
+WALL_MIN_LENGTH = 30
+
 # 折线/曲线切分（_polyline_platforms）：形态学路把每个墨连通域拟合成一条直线，
 # 折线与弧线会被 bbox 高度门限当「厚重墨块」剔除、被水平开运算剪碎，这里补一条多段路。
 POLYLINE_EPSILON = 2.0        # RDP 容差（px），只用于找拐点
@@ -621,7 +627,7 @@ def _walls(ink, image, marker_regions=(), block_regions=()):
                                 cv2.getStructuringElement(cv2.MORPH_RECT, (1, 9)))
     n, labels, stats, _ = cv2.connectedComponentsWithStats(vertical, 8)
     h, w = ink.shape
-    minimum = max(55, int(min(h, w) * .10))
+    minimum = WALL_MIN_LENGTH
     found = []
     for label in range(1, n):
         x, y, width, height, area = map(int, stats[label])
@@ -650,7 +656,7 @@ def _walls(ink, image, marker_regions=(), block_regions=()):
         lo, hi = float(projections.min()) + 1., float(projections.max()) - 1.
         a, b = origin + lo * unit, origin + hi * unit
         length = float(np.hypot(*(b - a)))
-        if centerline_length + .01 < max(55., min(h, w) * .10):
+        if centerline_length + .01 < WALL_MIN_LENGTH:
             continue
         if centerline_length < 110:
             safe_margin = max(25, int(min(h, w) * .05))

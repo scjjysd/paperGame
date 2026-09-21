@@ -61,7 +61,7 @@
    391
   ],
   "status": "ready",
-  "walls": 1
+  "walls": 7
  },
  "faint-pen-second-take.png": {
   "blocks": 2,
@@ -77,7 +77,7 @@
    391
   ],
   "status": "ready",
-  "walls": 1
+  "walls": 7
  },
  "goal-near-right-edge.png": {
   "blocks": 0,
