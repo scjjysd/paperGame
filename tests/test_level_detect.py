@@ -627,5 +627,7 @@ def test_cropped_real_photo_frame_canvas_recovers_top_platforms(tmp_path):
     frame = detect(rectified.rectified_path, tmp_path / 'frame', frame_canvas=True)
 
     assert len(paper.platform_candidates) == 9
-    assert len(frame.platform_candidates) == 12
+    # 12 + 2：短线 28px 边缘安全边距在取景框画布下不再适用后，
+    # 左缘 (10,153,100,150) 与右缘 (809,308,889,312) 两条真实横线被放回。
+    assert len(frame.platform_candidates) == 14
     assert len(frame.block_candidates) == len(paper.block_candidates)

@@ -444,7 +444,12 @@ def _platforms(ink, red, image, marker_regions=(), block_regions=(),
         if centerline_length + .01 < max(55., min(h, w) * .10):
             continue
         if centerline_length < 110:
-            safe_margin = max(25, int(min(h, w) * .05))
+            # 短贴边墨迹在纸张拉正画布上基本都是纸边/阴影碎片（边缘朝外是桌面），
+            # 所以要求离边 28px。但降级画布就是前端取景框，边缘是玩家可见、可画的
+            # 边界，照搬会把画到框边的合法短平台整条吃掉（job level_671a051473cf：
+            # 左下 90×41 与右下 112×15 两条真实横线被剔，而它们细长比 13.7/18.2、
+            # 连续性 1.00/0.99 全部合格）。取景框下只要求不越出画布。
+            safe_margin = 2 if frame_canvas else max(25, int(min(h, w) * .05))
             if (min(center_a[0], center_b[0]) < safe_margin
                     or max(center_a[0], center_b[0]) >= w - safe_margin
                     or min(center_a[1], center_b[1]) < safe_margin

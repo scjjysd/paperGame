@@ -312,7 +312,8 @@ def test_curved_arc_and_zigzag_are_segmented_into_platforms(tmp_path, monkeypatc
     downs = [p for p in steep if (p.end.y - p.start.y) * (p.end.x - p.start.x) > 0]
     ups = [p for p in steep if (p.end.y - p.start.y) * (p.end.x - p.start.x) < 0]
     assert len(downs) >= 3 and len(ups) >= 3          # W 至少两个谷一个峰
-    assert len(level.platforms) == 20
+    # 20 + 2：取景框下短线不再要求离边 28px，左下与右下两条真实横线放回。
+    assert len(level.platforms) == 22
     endpoints = {(p.start.x, p.start.y) for p in level.platforms} | \
                 {(p.end.x, p.end.y) for p in level.platforms}
     linked = sum(1 for p in level.platforms
@@ -361,7 +362,8 @@ def test_visible_canvas_fallback_keeps_large_valid_flag(tmp_path, monkeypatch):
     # 降级画布下平台侧不再沿用纸张拉正的贴边门槛：cropped 顶部 3 条真笔迹此前被
     # 当成「纸外背景」吃掉（9→12）。rolled 的纸卷上沿会横跨画布两边，仍被剔除。
     # rolled 11→14：折线切分多段路把上部一条微弯长横线忠实拆成 3 段。
-    ('cropped-paper-markers.jpg', 82, 808, 12, 3),
+    # cropped 12→14：短线 28px 边缘安全边距在取景框下不再适用，左右缘各放回 1 条真横线。
+    ('cropped-paper-markers.jpg', 82, 808, 14, 3),
     ('rolled-page-markers.jpg', 199, 690, 14, 2),
 ])
 def test_real_photo_without_four_visible_paper_edges_generates_level(
