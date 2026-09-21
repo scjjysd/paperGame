@@ -70,3 +70,9 @@
 
 `faint-pen-second-take.png`：与 `faint-pen-closed-rectangles.png` 是同一张画的另一次拍照
 （同为 1280×800，字节不同）。两拍都保留，用来观察同画不同拍照的结果漂移。
+
+## out-of-canvas-endpoint.png
+
+job level_ba9d6d765994（2026-09-21 16:16 用户上传，1280×800 取景框降级画布）。画面=拱形弧线+M形折线+左下贴左缘长斜线。失败现象：整图 PLATFORM_GEOMETRY_AMBIGUOUS——文案是「重复或缺少墨迹证据」，真实原因是折线切分段端点被 fitLine 投影极值外推出画布（platforms.0.start.x=-1），契约校验失败把 24 条全合格的候选一起打挂。修复=发布前端点统一 clamp 进画布 + parse 平台侧补越界过滤。验收：ready、P24、无越界坐标。
+
+入库时结果：`ready | P24 W0 B0 | 终点 39x95@768,440 | 起点 109,525`

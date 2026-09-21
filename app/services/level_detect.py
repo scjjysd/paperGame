@@ -556,6 +556,10 @@ def _polyline_platforms(mask, image, marker_regions=(), frame_canvas=False, exis
             projections = (sub - origin) @ unit
             a = origin + float(projections.min()) * unit
             b = origin + float(projections.max()) * unit
+            # fitLine 的投影极值会外推出画布（job level_ba9d6d765994 出现过 x=-1），
+            # 而契约要求坐标落在画布内，否则整图被 PLATFORM_GEOMETRY_AMBIGUOUS 拦下。
+            a = np.clip(a, [0., 0.], [w - 1., h - 1.])
+            b = np.clip(b, [0., 0.], [w - 1., h - 1.])
             length = float(np.hypot(b[0] - a[0], b[1] - a[1]))
             if length < POLYLINE_MIN_SEG:
                 continue
@@ -733,6 +737,18 @@ def detect(rectified_path: Path, job_dir: Path, *,
                                    frame_canvas=frame_canvas, existing=platforms)
     if polyline:
         platforms = platforms + polyline
+    # 两条路的端点都由 fitLine 投影极值外推而来，可能落在画布外（job
+    # level_ba9d6d765994 出过 x=-1）。契约要求坐标在画布内，否则整张关卡
+    # 过不了校验、被当成「几何存疑」转复核，所以发布前统一收进画布。
+    height, width = line_ink.shape
+    platforms = [PlatformCandidate(
+        p.id,
+        PointCandidate(int(np.clip(round(p.start.x), 0, width - 1)),
+                       int(np.clip(round(p.start.y), 0, height - 1))),
+        PointCandidate(int(np.clip(round(p.end.x), 0, width - 1)),
+                       int(np.clip(round(p.end.y), 0, height - 1))),
+        p.confidence, p.angle_degrees) for p in platforms]
+    if polyline:
         platforms = [PlatformCandidate(f'line_{i:03d}', p.start, p.end,
                                        p.confidence, p.angle_degrees)
                      for i, p in enumerate(platforms, 1)]

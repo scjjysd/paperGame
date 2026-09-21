@@ -114,6 +114,22 @@
  "low-contrast-paper.jpg": {
   "status": "START_NOT_FOUND"
  },
+ "out-of-canvas-endpoint.png": {
+  "blocks": 0,
+  "goal": [
+   768,
+   440,
+   39,
+   95
+  ],
+  "platforms": 24,
+  "start": [
+   109,
+   525
+  ],
+  "status": "ready",
+  "walls": 0
+ },
  "phone.jpg": {
   "blocks": 39,
   "goal": [

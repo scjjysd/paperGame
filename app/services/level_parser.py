@@ -152,7 +152,8 @@ def _duplicate(platforms: Sequence[Any]) -> bool:
     return False
 
 
-def _platforms(candidates: Sequence[Any]) -> List[Dict[str, Any]]:
+def _platforms(candidates: Sequence[Any], width: int = None,
+               height: int = None) -> List[Dict[str, Any]]:
     ordered = sorted(candidates, key=lambda p: (
         min(p.start.x, p.end.x), min(p.start.y, p.end.y),
         max(p.start.x, p.end.x), max(p.start.y, p.end.y), p.id))
@@ -161,6 +162,11 @@ def _platforms(candidates: Sequence[Any]) -> List[Dict[str, Any]]:
         start, end = candidate.start, candidate.end
         if start.x > end.x:
             start, end = end, start
+        # 越界端点会让整张关卡过不了契约校验并被当成「几何存疑」转复核
+        # （job level_ba9d6d765994：一条 x=-1 的平台打挂了整图的 24 条候选）。
+        if width is not None and height is not None:
+            if any(not (0 <= p.x < width and 0 <= p.y < height) for p in (start, end)):
+                continue
         result.append({'id': 'platform_{:03d}'.format(index),
                        'start': {'x': start.x, 'y': start.y},
                        'end': {'x': end.x, 'y': end.y},
@@ -402,7 +408,9 @@ def parse(job_dir: Path, progress: Progress = None,
                   'background': {'imageUrl': background_url, 'contentType': 'image/png',
                                  'width': rectified.width, 'height': rectified.height,
                                  'sha256': hashlib.sha256(rectified.rectified_path.read_bytes()).hexdigest()},
-                  'playerStart': start, 'platforms': _platforms(semantic.platforms),
+                  'playerStart': start,
+                  'platforms': _platforms(semantic.platforms,
+                                          rectified.width, rectified.height),
                   'walls': walls, 'blocks': blocks,
                   'goalRegion': _goal_region(max(semantic.goals, key=lambda goal: (goal.confidence, goal.id)))}
     try:
