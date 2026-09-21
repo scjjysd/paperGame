@@ -24,6 +24,15 @@ MAX_WALL_TILT_DEGREES = 30.0
 # 细长比门限：中心线长度 / 法向厚度。外接框宽高比会随倾角天然变小，不能用作判据。
 MIN_LINE_ELONGATION = 4.5
 
+# 折线/曲线切分（_polyline_platforms）：形态学路把每个墨连通域拟合成一条直线，
+# 折线与弧线会被 bbox 高度门限当「厚重墨块」剔除、被水平开运算剪碎，这里补一条多段路。
+POLYLINE_EPSILON = 2.0        # RDP 容差（px），只用于找拐点
+POLYLINE_MIN_SEG = 15.0       # 段最短中心线；拐角连接段也放行
+POLYLINE_LONG_SEG = 40.0      # ≥它独立成立；更短的段必须与长段首尾相连才保留
+POLYLINE_MAX_COL_SPAN = 40    # 单列 y 跨度超过它视为近竖直，该列不参与中心线
+POLYLINE_MIN_COVERAGE = .55   # 发布前自查墨覆盖率（与 parse 几何门禁同式）
+POLYLINE_MIN_RMS = 3.0        # 整线 fitLine 法向 RMS ≥ 它才算曲线/折线；直线交给形态学路
+
 @dataclass(frozen=True)
 class PointCandidate:
     x: int
@@ -481,6 +490,124 @@ def _platforms(ink, red, image, marker_regions=(), block_regions=(),
             for i, (_, _, _, p) in enumerate(merged, 1)]
 
 
+def _polyline_platforms(mask, image, marker_regions=(), frame_canvas=False, existing=()):
+    """折线/曲线按拐点切分成直线段，补形态学路的漏检。
+
+    形态学路把每个墨连通域整体拟合成一条直线：一笔折线被 bbox 高度门限
+    当「厚重墨块」剔除（job level_671a051473cf 的 W 折线甚至先被水平开运算
+    剪碎成 <56px 的碎片），一笔弧线同样被剔。这里在原始墨掩膜上取中心线点串，
+    RDP 找拐点后逐段拟合直线，每段走与 _platforms 相同的门禁后作为独立平台发布。
+    """
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    h, w = mask.shape
+    n, labels, stats, _ = cv2.connectedComponentsWithStats(mask, 8)
+    found = []
+    for label in range(1, n):
+        x, y, width, height, area = map(int, stats[label])
+        if width < 80 or area < 250:
+            continue
+        ys, xs = np.nonzero(labels == label)
+        columns = {}
+        for xx, yy in zip(xs, ys):
+            columns.setdefault(int(xx), []).append(int(yy))
+        points = []
+        for xx in sorted(columns):
+            column = columns[xx]
+            if max(column) - min(column) > POLYLINE_MAX_COL_SPAN:
+                continue
+            points.append((float(xx), float(np.median(column))))
+        if len(points) < 12:
+            continue
+        curve = np.array(points, np.float32)
+        # 整线直线度复核：纸边、装订线、桌面分界这类直线 RMS≈0，留给形态学路
+        gx, gy, g0x, g0y = cv2.fitLine(curve, cv2.DIST_L2, 0, .01, .01).reshape(-1)
+        normal = np.array([-float(gy), float(gx)])
+        rms = float(np.sqrt(np.mean(((curve - np.array([g0x, g0y])) @ normal) ** 2)))
+        if rms < POLYLINE_MIN_RMS:
+            continue
+        poly = cv2.approxPolyDP(curve.reshape(-1, 1, 2), POLYLINE_EPSILON, True).reshape(-1, 2)
+        if len(poly) < 3:
+            continue
+        # RDP 只负责找拐点；每段用段内真实中心线点重新 fitLine，端点取投影极值
+        vertex_index = [int(np.argmin(np.linalg.norm(curve - v, axis=1))) for v in poly[:-1]]
+        bounds = vertex_index + [len(points) - 1]
+        segments = []
+        for si in range(len(bounds) - 1):
+            i0, i1 = bounds[si], bounds[si + 1]
+            if i1 - i0 < 3:
+                continue
+            sub = curve[i0:i1 + 1]
+            vx, vy, x0, y0 = cv2.fitLine(sub, cv2.DIST_L2, 0, .01, .01).reshape(-1)
+            if abs(float(vy)) > abs(float(vx)) * 2.0:
+                continue  # 段内近竖直，交给 _walls
+            unit = np.array([float(vx), float(vy)])
+            origin = np.array([float(x0), float(y0)])
+            projections = (sub - origin) @ unit
+            a = origin + float(projections.min()) * unit
+            b = origin + float(projections.max()) * unit
+            length = float(np.hypot(b[0] - a[0], b[1] - a[1]))
+            if length < POLYLINE_MIN_SEG:
+                continue
+            angle = float(np.degrees(np.arctan2(b[1] - a[1], b[0] - a[0])))
+            if abs(angle) > MAX_PLATFORM_SLOPE_DEGREES:
+                continue
+            # 与 _platforms 一致的边界门禁
+            if frame_canvas:
+                if _crosses_both_side_edges(min(a[0], b[0]), abs(b[0] - a[0]), w):
+                    continue
+            elif (min(a[1], b[1]) < max(25, int(h * .15)) or min(a[0], b[0]) <= 5
+                    or (max(a[0], b[0]) >= w - 5 and min(a[1], b[1]) < int(h * .20))):
+                continue
+            if max(a[1], b[1]) >= h - 7 or min(a[1], b[1]) < 0:
+                continue
+            if not _is_line_allowed(a, b, marker_regions, ()):
+                continue
+            # 与形态学路已发布的候选重复（段中点落在既有线上 <10px）则跳过
+            mid = np.array([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2])
+            duplicate = False
+            for pc in existing:
+                sx, sy = float(pc.start.x), float(pc.start.y)
+                ex_, ey_ = float(pc.end.x) - sx, float(pc.end.y) - sy
+                denom = ex_ * ex_ + ey_ * ey_
+                t = 0.0 if denom == 0 else max(0.0, min(
+                    1.0, ((mid[0] - sx) * ex_ + (mid[1] - sy) * ey_) / denom))
+                if float(np.hypot(mid[0] - (sx + t * ex_), mid[1] - (sy + t * ey_))) < 10:
+                    duplicate = True
+                    break
+            if duplicate:
+                continue
+            # 发布前自查墨覆盖率（与 parse 的 _coverage 同式 ±1px），不达标不发布，
+            # 否则整图会被 parse 的 PLATFORM_GEOMETRY_AMBIGUOUS 门禁拦成复核
+            samples = max(2, int(length))
+            sample_x = np.clip(np.rint(np.linspace(a[0], b[0], samples)).astype(int), 0, w - 1)
+            sample_y = np.clip(np.rint(np.linspace(a[1], b[1], samples)).astype(int), 0, h - 1)
+            hits = [mask[max(0, yy - 1):min(h, yy + 2), max(0, xx - 1):min(w, xx + 2)].any()
+                    for xx, yy in zip(sample_x, sample_y)]
+            if float(np.mean(hits)) < POLYLINE_MIN_COVERAGE:
+                continue
+            segments.append((a, b, angle, length))
+
+        def _linked_short(seg, others):
+            for other in others:
+                if min(np.hypot(seg[0][0] - other[0][0], seg[0][1] - other[0][1]),
+                       np.hypot(seg[0][0] - other[1][0], seg[0][1] - other[1][1]),
+                       np.hypot(seg[1][0] - other[0][0], seg[1][1] - other[0][1]),
+                       np.hypot(seg[1][0] - other[1][0], seg[1][1] - other[1][1])) < 8:
+                    return True
+            return False
+
+        # 孤立短段剔除：短段只有与长段首尾相连（拐角连接段）才保留
+        long_segments = [seg for seg in segments if seg[3] >= POLYLINE_LONG_SEG]
+        segments = [seg for seg in segments
+                    if seg[3] >= POLYLINE_LONG_SEG or _linked_short(seg, long_segments)]
+        for a, b, angle, length in segments:
+            confidence = min(.99, .68 + min(.29, length / max(w, 1) * .25))
+            found.append(PlatformCandidate('', PointCandidate(round(float(a[0])), round(float(a[1]))),
+                                           PointCandidate(round(float(b[0])), round(float(b[1]))),
+                                           confidence, angle))
+    return found
+
+
 def _walls(ink, image, marker_regions=(), block_regions=()):
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     vertical = cv2.morphologyEx(ink, cv2.MORPH_CLOSE,
@@ -590,6 +717,14 @@ def detect(rectified_path: Path, job_dir: Path, *,
             roi[cv2.dilate(evidence.mask, np.ones((17, 17), np.uint8)) > 0] = 0
     platforms = _platforms(line_ink, red, image, marker_regions,
                            frame_canvas=frame_canvas)
+    # 折线/曲线多段路：形态学路只认「一笔一条直线」，这里按拐点切分补漏
+    polyline = _polyline_platforms(line_ink, image, marker_regions,
+                                   frame_canvas=frame_canvas, existing=platforms)
+    if polyline:
+        platforms = platforms + polyline
+        platforms = [PlatformCandidate(f'line_{i:03d}', p.start, p.end,
+                                       p.confidence, p.angle_degrees)
+                     for i, p in enumerate(platforms, 1)]
     walls = _walls(line_ink, image, marker_regions)
     goals = [GoalCandidate(f'goal_{i:03d}', RegionCandidate(x, y, w, h, .9), .9)
              for i, (x, y, w, h) in enumerate(flags, 1)]

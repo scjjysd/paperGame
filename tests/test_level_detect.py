@@ -325,7 +325,8 @@ def test_every_sloped_stroke_lands_in_exactly_one_bucket(tmp_path, angle):
 
 
 def test_shallow_vee_is_not_a_platform(tmp_path):
-    """折线不是直线：外接框高度门限按倾角折算后仍须拦住浅 V 形。"""
+    """浅 V 形不再是「一条假直线平台」：折线切分多段路把它忠实拆成两条斜线段
+    （原单线 fitLine 模型下 V 会被发布成一条中间悬空的假直线，故旧断言是 0 条）。"""
     image = tmp_path / 'shallow-vee.png'
     _write_image(image, size=(900, 560), lines=[
         (280, 250, 450, 300, 7),
@@ -334,7 +335,12 @@ def test_shallow_vee_is_not_a_platform(tmp_path):
 
     result = detect(image, tmp_path)
 
-    assert result.platform_candidates == []
+    platforms = result.platform_candidates
+    assert len(platforms) == 2
+    angles = sorted(p.angle_degrees for p in platforms)
+    assert angles[0] < 0 < angles[1]          # 一条下坡、一条上坡，方向相反
+    for p in platforms:
+        assert p.length >= 150                # 两段各 ~183px，不是碎片段
 
 
 def test_sloped_platform_height_budget_scales_with_angle(tmp_path):

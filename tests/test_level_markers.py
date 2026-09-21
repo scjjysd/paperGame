@@ -286,6 +286,40 @@ def test_faint_pen_rectangle_corner_is_not_a_second_flag(tmp_path, monkeypatch):
     assert goal.width >= 45 and goal.height >= 60
 
 
+def test_curved_arc_and_zigzag_are_segmented_into_platforms(tmp_path, monkeypatch):
+    """一笔弧线与一笔 W 折线必须按拐点切成直线段，而不是整条丢失（job level_671a051473cf）。
+
+    旧管线把每个墨连通域整体拟合成一条直线：折线被水平开运算剪碎成 <56px
+    碎片、弧线被 bbox 高度门限当「厚重墨块」剔除，曲线折线完全识别不了。
+    """
+    from app.level_contracts import LevelReady
+    from app.services.level_parser import parse
+
+    for key in ('LEVEL_LLM_BASE_URL', 'LEVEL_LLM_API_KEY', 'LEVEL_LLM_MODEL'):
+        monkeypatch.delenv(key, raising=False)
+    source = Path(__file__).resolve().parents[1] / (
+        'testdata/levels/real/curved-arc-and-zigzag.jpg')
+    (tmp_path / 'input.png').write_bytes(source.read_bytes())
+
+    result = LevelReady.model_validate(parse(tmp_path))
+
+    level = result.result.level
+    assert abs(level.playerStart.x - 92) <= 8
+    assert abs(level.goalRegion.x - 783) <= 8
+    # W 折线链：谷底两侧斜率相反的段必须同时存在，且首尾相接不断链
+    steep = [p for p in level.platforms
+             if abs(p.end.y - p.start.y) >= 40 and abs(p.end.x - p.start.x) >= 40]
+    downs = [p for p in steep if (p.end.y - p.start.y) * (p.end.x - p.start.x) > 0]
+    ups = [p for p in steep if (p.end.y - p.start.y) * (p.end.x - p.start.x) < 0]
+    assert len(downs) >= 3 and len(ups) >= 3          # W 至少两个谷一个峰
+    assert len(level.platforms) == 20
+    endpoints = {(p.start.x, p.start.y) for p in level.platforms} | \
+                {(p.end.x, p.end.y) for p in level.platforms}
+    linked = sum(1 for p in level.platforms
+                 if (p.start.x, p.start.y) in endpoints and (p.end.x, p.end.y) in endpoints)
+    assert linked >= 15                                # 段间共享端点（链式衔接）
+
+
 def test_real_flag_overlapping_circle_candidate_generates_level(tmp_path, monkeypatch):
     """真实旗帜即使同时触发霍夫圆，也必须由旗杆＋三角旗面的正向证据保留下来。"""
     from app.level_contracts import LevelReady
@@ -326,8 +360,9 @@ def test_visible_canvas_fallback_keeps_large_valid_flag(tmp_path, monkeypatch):
 @pytest.mark.parametrize('filename,start_x,goal_x,platform_count,block_count', [
     # 降级画布下平台侧不再沿用纸张拉正的贴边门槛：cropped 顶部 3 条真笔迹此前被
     # 当成「纸外背景」吃掉（9→12）。rolled 的纸卷上沿会横跨画布两边，仍被剔除。
+    # rolled 11→14：折线切分多段路把上部一条微弯长横线忠实拆成 3 段。
     ('cropped-paper-markers.jpg', 82, 808, 12, 3),
-    ('rolled-page-markers.jpg', 199, 690, 11, 2),
+    ('rolled-page-markers.jpg', 199, 690, 14, 2),
 ])
 def test_real_photo_without_four_visible_paper_edges_generates_level(
         tmp_path, monkeypatch, filename, start_x, goal_x, platform_count, block_count):
