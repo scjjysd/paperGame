@@ -1,5 +1,19 @@
 # 真实拍摄回归样本
 
+## 入库约定（2026-09-21 用户要求）
+
+**任何一张用户拿来提问的失败图，都必须进本目录，并在之后每次改动里参与回归。**
+流程：
+
+1. `python scripts/tools/admit_failed_case.py --job <jobId> --name <描述性名字>`
+   （或 `--file <本地路径>`；NAS 不可达时自动回退客户端缓存）
+2. 在本文件补一段说明：画面特征 + 当初的失败现象 + jobId + 验收值
+3. `PG_UPDATE_BASELINE=1 pytest tests/test_real_corpus.py -q --basetemp=.pytest-tmp` 写快照
+
+`tests/test_real_corpus.py` 遍历本目录每张图跑端到端 `parse()`，与
+`tests/snapshots/real_corpus.json` 比对——**新样本不需改测试文件**，漏写快照会被
+`test_every_real_sample_has_a_snapshot` 拦下。
+
 `low-contrast-paper.jpg`：用户于 2026-09-13 提供的浅色纸张/浅色桌面照片，原尺寸 1280×960。用于验证亮度分割失败时的多尺度边缘兜底。近似人工标注四角（左上、右上、右下、左下）：`(85,100)、(1185,55)、(1235,875)、(20,885)`；纸张边缘略有弯曲，定位容差为原图 25 像素。
 
 `hand-drawn-markers.jpg`：用户于 2026-09-14 提供的真实关卡照片，包含有小断口的手绘圆圈和连接平台的黑色实心三角旗；同时存在明显上下光照差，用于完整纸张定位和标记识别回归。近似人工标注四角为：`(132,76)、(1176,52)、(1224,815)、(38,830)`。
@@ -42,3 +56,15 @@
 识别质量**只以本目录的真实照片为准**。`testdata/levels/synthetic` 与 `testdata/levels/golden` 是
 `scripts/tools/gen_level_samples.py` 生成的合成稿（无纸纹、无光照差、无手写抖动），不代表真实拍照，
 相关用例已标 `@pytest.mark.synthetic` 并移出默认回归；需要时用 `pytest -m synthetic` 单独跑。
+
+
+# 贴右缘旗帜回归（2026-09-21）
+
+`goal-near-right-edge.png`：用户于 2026-09-21 由客户端上传（job `level_94a770f10ad8`），
+原尺寸 1360×850，走 `visible_canvas_fallback`。终点旗画在取景框右缘（旗框中心 x=872 / 画布 900），
+旧版降级路径硬编码 5% 边缘内缩（x∈(45,855)）把它剔除，报 `GOAL_NOT_FOUND`；
+修复为 `VISIBLE_FRAME_MARGIN=.02`（x∈(18,882)）后恢复。
+验收：`playerStart ≈ (130,169)`、`goalRegion ≈ (846,50,47×62)`、平台 10 条。
+
+`faint-pen-second-take.png`：与 `faint-pen-closed-rectangles.png` 是同一张画的另一次拍照
+（同为 1280×800，字节不同）。两拍都保留，用来观察同画不同拍照的结果漂移。

@@ -1,0 +1,213 @@
+{
+ "closeup-corner-flag.png": {
+  "blocks": 0,
+  "goal": [
+   843,
+   33,
+   43,
+   61
+  ],
+  "platforms": 10,
+  "start": [
+   176,
+   157
+  ],
+  "status": "ready",
+  "walls": 0
+ },
+ "cropped-paper-markers.jpg": {
+  "blocks": 3,
+  "goal": [
+   808,
+   36,
+   41,
+   68
+  ],
+  "platforms": 14,
+  "start": [
+   82,
+   497
+  ],
+  "status": "ready",
+  "walls": 0
+ },
+ "curved-arc-and-zigzag.jpg": {
+  "blocks": 0,
+  "goal": [
+   783,
+   247,
+   42,
+   81
+  ],
+  "platforms": 22,
+  "start": [
+   92,
+   384
+  ],
+  "status": "ready",
+  "walls": 0
+ },
+ "faint-pen-closed-rectangles.png": {
+  "blocks": 2,
+  "goal": [
+   528,
+   41,
+   52,
+   72
+  ],
+  "platforms": 15,
+  "start": [
+   127,
+   391
+  ],
+  "status": "ready",
+  "walls": 1
+ },
+ "faint-pen-second-take.png": {
+  "blocks": 2,
+  "goal": [
+   528,
+   41,
+   52,
+   72
+  ],
+  "platforms": 14,
+  "start": [
+   127,
+   391
+  ],
+  "status": "ready",
+  "walls": 1
+ },
+ "goal-near-right-edge.png": {
+  "blocks": 0,
+  "goal": [
+   846,
+   50,
+   47,
+   62
+  ],
+  "platforms": 10,
+  "start": [
+   130,
+   169
+  ],
+  "status": "ready",
+  "walls": 0
+ },
+ "hand-drawn-markers.jpg": {
+  "blocks": 0,
+  "goal": [
+   800,
+   93,
+   43,
+   56
+  ],
+  "platforms": 7,
+  "start": [
+   148,
+   182
+  ],
+  "status": "ready",
+  "walls": 0
+ },
+ "low-contrast-paper.jpg": {
+  "status": "START_NOT_FOUND"
+ },
+ "phone.jpg": {
+  "blocks": 39,
+  "goal": [
+   832,
+   65,
+   45,
+   63
+  ],
+  "platforms": 0,
+  "start": [
+   163,
+   202
+  ],
+  "status": "ready",
+  "walls": 0
+ },
+ "phone.png": {
+  "blocks": 0,
+  "goal": [
+   786,
+   247,
+   39,
+   173
+  ],
+  "platforms": 4,
+  "start": [
+   92,
+   369
+  ],
+  "status": "ready",
+  "walls": 0
+ },
+ "rolled-page-markers.jpg": {
+  "blocks": 2,
+  "goal": [
+   690,
+   142,
+   30,
+   49
+  ],
+  "platforms": 14,
+  "start": [
+   199,
+   462
+  ],
+  "status": "ready",
+  "walls": 1
+ },
+ "shape-preserving-rectangles.png": {
+  "blocks": 13,
+  "goal": [
+   812,
+   65,
+   42,
+   63
+  ],
+  "platforms": 0,
+  "start": [
+   150,
+   184
+  ],
+  "status": "ready",
+  "walls": 0
+ },
+ "shape-preserving-source.jpg": {
+  "blocks": 13,
+  "goal": [
+   814,
+   66,
+   40,
+   62
+  ],
+  "platforms": 0,
+  "start": [
+   150,
+   184
+  ],
+  "status": "ready",
+  "walls": 0
+ },
+ "short-platform.jpg": {
+  "blocks": 0,
+  "goal": [
+   796,
+   97,
+   45,
+   57
+  ],
+  "platforms": 10,
+  "start": [
+   152,
+   197
+  ],
+  "status": "ready",
+  "walls": 0
+ }
+}
